@@ -16,8 +16,6 @@ class FFTModule(nn.Module):
         x = torch.fft.ifft(fft_x, dim=2, norm='ortho')
         return x
 
-
-
 if __name__ == '__main__':
     x = torch.randn(size=(10, 10, 200))
     raw_x11 = x[0][0]
