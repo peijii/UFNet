@@ -1,8 +1,8 @@
-from turtle import forward
-from typing import Tuple
+from typing import List, Tuple
 import torch.nn as nn
 import pywt
 import torch
+import matplotlib.pyplot as plt
 import numpy as np
 import decomposition as depo
 
@@ -23,7 +23,7 @@ class DWT1DForward(nn.Module):
         self.levels = levels
         self.mode = mode
 
-    def forward(self, x):
+    def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, List]:
         """ Forward pass of the DWT.
 
         Args:
@@ -60,23 +60,21 @@ class DWT1DInverse(nn.Module):
         mode (str): 'zero', 'symmetric', 'reflect' or 'periodization'. The
             padding scheme
     """
-    def __init__(self, wave='db1', mode='zero'):
+    def __init__(
+        self,
+        wave: str = 'db1',
+        mode: str = 'zero'
+    ) -> None:
         super().__init__()
-        if isinstance(wave, str):
-            wave = pywt.Wavelet(wave)
-        if isinstance(wave, pywt.Wavelet):
-            g0, g1 = wave.rec_lo, wave.rec_hi
-        else:
-            assert len(wave) == 2
-            g0, g1 = wave[0], wave[1]
-
+        wave = pywt.Wavelet(wave)
+        low_pass, high_pass = wave.dec_lo, wave.dec_hi
         # Prepare the filters
-        filts = depo.prep_filt_sfb1d(g0, g1)
-        self.register_buffer('g0', filts[0])
-        self.register_buffer('g1', filts[1])
+        filters = depo.prep_filt_sfb1d(low_pass, high_pass)
+        self.g0 = filters[0]
+        self.g1 = filters[1]
         self.mode = mode
 
-    def forward(self, coeffs):
+    def forward(self, coeffs: Tuple[torch.Tensor, List]) -> torch.Tensor:
         """
         Args:
             coeffs (yl, yh): tuple of lowpass and bandpass coefficients, should
@@ -104,10 +102,32 @@ class DWT1DInverse(nn.Module):
         return x0
 
 
+class DWTNet(nn.Module):
+
+    def __init__(
+        self,
+        levels: int = 1
+    ) -> None:
+        super(DWTNet, self).__init__()
+        self.dwt = DWT1DForward(levels=levels)
+        self.idwt = DWT1DInverse()
+        self.low_pass_parameter = nn.Parameter(torch.ones(size=(1, ), dtype=torch.float32))
+        self.high_pass_parameter = nn.Parameter(torch.ones(size=(levels+1, ), dtype=torch.float32))
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        low_x, high_xs = self.dwt(x)
+        low_x = self.low_pass_parameter * low_x
+        high_xs = [high_x * self.high_pass_parameter[i] for i, high_x in enumerate(high_xs)]
+        x = self.idwt((low_x, high_xs))
+        return x
+
+
 if __name__ == '__main__':
     x = torch.randn(size=(10, 10, 1000))
     raw_x11 = x[0][0]
-    model = DWT1DForward(levels=3)
-    res = model(x)
-    print(res[0].shape)
-    #print(res[0][0])
+    #plt.plot(raw_x11)
+    model = DWTNet(levels=1)
+    res = model(x).detach().numpy()
+    print(res[0][0])
+    #plt.plot(res[0][0])
+    #plt.show()

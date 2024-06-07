@@ -5,6 +5,108 @@ from torch.autograd import Function
 import pywt
 
 
+def roll(x, n, dim, make_even=False):
+    if n < 0:
+        n = x.shape[dim] + n
+
+    if make_even and x.shape[dim] % 2 == 1:
+        end = 1
+    else:
+        end = 0
+
+    if dim == 0:
+        return torch.cat((x[-n:], x[:-n+end]), dim=0)
+    elif dim == 1:
+        return torch.cat((x[:,-n:], x[:,:-n+end]), dim=1)
+    elif dim == 2 or dim == -2:
+        return torch.cat((x[:,:,-n:], x[:,:,:-n+end]), dim=2)
+    elif dim == 3 or dim == -1:
+        return torch.cat((x[:,:,:,-n:], x[:,:,:,:-n+end]), dim=3)
+
+
+def reflect(x, minx, maxx):
+    """Reflect the values in matrix *x* about the scalar values *minx* and
+    *maxx*.  Hence a vector *x* containing a long linearly increasing series is
+    converted into a waveform which ramps linearly up and down between *minx*
+    and *maxx*.  If *x* contains integers and *minx* and *maxx* are (integers +
+    0.5), the ramps will have repeated max and min samples.
+
+    .. codeauthor:: Rich Wareham <rjw57@cantab.net>, Aug 2013
+    .. codeauthor:: Nick Kingsbury, Cambridge University, January 1999.
+
+    """
+    x = np.asanyarray(x)
+    rng = maxx - minx
+    rng_by_2 = 2 * rng
+    mod = np.fmod(x - minx, rng_by_2)
+    normed_mod = np.where(mod < 0, mod + rng_by_2, mod)
+    out = np.where(normed_mod >= rng, rng_by_2 - normed_mod, normed_mod) + minx
+    return np.array(out, dtype=x.dtype)
+
+
+def mypad(x, pad, mode='constant', value=0):
+    """ Function to do numpy like padding on tensors. Only works for 2-D
+    padding.
+
+    Inputs:
+        x (tensor): tensor to pad
+        pad (tuple): tuple of (left, right, top, bottom) pad sizes
+        mode (str): 'symmetric', 'wrap', 'constant, 'reflect', 'replicate', or
+            'zero'. The padding technique.
+    """
+    if mode == 'symmetric':
+        # Vertical only
+        if pad[0] == 0 and pad[1] == 0:
+            m1, m2 = pad[2], pad[3]
+            l = x.shape[-2]
+            xe = reflect(np.arange(-m1, l+m2, dtype='int32'), -0.5, l-0.5)
+            return x[:,:,xe]
+        # horizontal only
+        elif pad[2] == 0 and pad[3] == 0:
+            m1, m2 = pad[0], pad[1]
+            l = x.shape[-1]
+            xe = reflect(np.arange(-m1, l+m2, dtype='int32'), -0.5, l-0.5)
+            return x[:,:,:,xe]
+        # Both
+        else:
+            m1, m2 = pad[0], pad[1]
+            l1 = x.shape[-1]
+            xe_row = reflect(np.arange(-m1, l1+m2, dtype='int32'), -0.5, l1-0.5)
+            m1, m2 = pad[2], pad[3]
+            l2 = x.shape[-2]
+            xe_col = reflect(np.arange(-m1, l2+m2, dtype='int32'), -0.5, l2-0.5)
+            i = np.outer(xe_col, np.ones(xe_row.shape[0]))
+            j = np.outer(np.ones(xe_col.shape[0]), xe_row)
+            return x[:,:,i,j]
+    elif mode == 'periodic':
+        # Vertical only
+        if pad[0] == 0 and pad[1] == 0:
+            xe = np.arange(x.shape[-2])
+            xe = np.pad(xe, (pad[2], pad[3]), mode='wrap')
+            return x[:,:,xe]
+        # Horizontal only
+        elif pad[2] == 0 and pad[3] == 0:
+            xe = np.arange(x.shape[-1])
+            xe = np.pad(xe, (pad[0], pad[1]), mode='wrap')
+            return x[:,:,:,xe]
+        # Both
+        else:
+            xe_col = np.arange(x.shape[-2])
+            xe_col = np.pad(xe_col, (pad[2], pad[3]), mode='wrap')
+            xe_row = np.arange(x.shape[-1])
+            xe_row = np.pad(xe_row, (pad[0], pad[1]), mode='wrap')
+            i = np.outer(xe_col, np.ones(xe_row.shape[0]))
+            j = np.outer(np.ones(xe_col.shape[0]), xe_row)
+            return x[:,:,i,j]
+
+    elif mode == 'constant' or mode == 'reflect' or mode == 'replicate':
+        return F.pad(x, pad, mode, value)
+    elif mode == 'zero':
+        return F.pad(x, pad)
+    else:
+        raise ValueError("Unkown pad type: {}".format(mode))
+
+
 def afb1d(x, h0, h1, mode='zero', dim=-1):
     """ 1D analysis filter bank (along one dimension only) of an image
 
@@ -87,8 +189,6 @@ def afb1d(x, h0, h1, mode='zero', dim=-1):
             raise ValueError("Unkown pad type: {}".format(mode))
 
     return lohi
-
-
 
 
 def sfb1d(lo, hi, g0, g1, mode='zero', dim=-1):
@@ -236,6 +336,56 @@ class AFB1D(Function):
         return dx, None, None, None, None, None
 
 
+
+class SFB1D(Function):
+    """ Does a single level 1d wavelet decomposition of an input.
+
+    Needs to have the tensors in the right form. Because this function defines
+    its own backward pass, saves on memory by not having to save the input
+    tensors.
+
+    Inputs:
+        low (torch.Tensor): Lowpass to reconstruct of shape (N, C, L)
+        high (torch.Tensor): Highpass to reconstruct of shape (N, C, L)
+        g0: lowpass
+        g1: highpass
+        mode (int): use mode_to_int to get the int code here
+
+    We encode the mode as an integer rather than a string as gradcheck causes an
+    error when a string is provided.
+
+    Returns:
+        y: Tensor of shape (N, C*2, L')
+    """
+    @staticmethod
+    def forward(ctx, low, high, g0, g1, mode):
+        mode = int_to_mode(mode)
+        # Make into a 2d tensor with 1 row
+        low = low[:, :, None, :]
+        high = high[:, :, None, :]
+        g0 = g0[:, :, None, :]
+        g1 = g1[:, :, None, :]
+
+        ctx.mode = mode
+        ctx.save_for_backward(g0, g1)
+
+        return sfb1d(low, high, g0, g1, mode=mode, dim=3)[:, :, 0]
+
+    @staticmethod
+    def backward(ctx, dy):
+        dlow, dhigh = None, None
+        if ctx.needs_input_grad[0]:
+            mode = ctx.mode
+            g0, g1, = ctx.saved_tensors
+            dy = dy[:, :, None, :]
+
+            dx = afb1d(dy, g0, g1, mode=mode, dim=3)
+
+            dlow = dx[:, ::2, 0].contiguous()
+            dhigh = dx[:, 1::2, 0].contiguous()
+        return dlow, dhigh, None, None, None, None, None
+
+
 def prep_filt_afb1d(h0, h1, device=None):
     """
     Prepares the filters to be of the right form for the afb2d function.  In
@@ -256,3 +406,27 @@ def prep_filt_afb1d(h0, h1, device=None):
     h0 = torch.tensor(h0, device=device, dtype=t).reshape((1, 1, -1))
     h1 = torch.tensor(h1, device=device, dtype=t).reshape((1, 1, -1))
     return h0, h1
+
+
+
+def prep_filt_sfb1d(g0, g1, device=None):
+    """
+    Prepares the filters to be of the right form for the sfb1d function. In
+    particular, makes the tensors the right shape. It does not mirror image them
+    as as sfb2d uses conv2d_transpose which acts like normal convolution.
+
+    Inputs:
+        g0 (array-like): low pass filter bank
+        g1 (array-like): high pass filter bank
+        device: which device to put the tensors on to
+
+    Returns:
+        (g0, g1)
+    """
+    g0 = np.array(g0).ravel()
+    g1 = np.array(g1).ravel()
+    t = torch.get_default_dtype()
+    g0 = torch.tensor(g0, device=device, dtype=t).reshape((1, 1, -1))
+    g1 = torch.tensor(g1, device=device, dtype=t).reshape((1, 1, -1))
+
+    return g0, g1
