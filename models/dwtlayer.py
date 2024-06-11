@@ -1,10 +1,10 @@
+import imp
 from typing import List, Tuple
 import torch.nn as nn
 import pywt
 import torch
-import matplotlib.pyplot as plt
-import numpy as np
 import decomposition as depo
+
 
 class DWT1DForward(nn.Module):
 
@@ -102,13 +102,13 @@ class DWT1DInverse(nn.Module):
         return x0
 
 
-class DWTNet(nn.Module):
+class DWTLayer(nn.Module):
 
     def __init__(
         self,
         levels: int = 1
     ) -> None:
-        super(DWTNet, self).__init__()
+        super(DWTLayer, self).__init__()
         self.dwt = DWT1DForward(levels=levels)
         self.idwt = DWT1DInverse()
         self.low_pass_parameter = nn.Parameter(torch.ones(size=(1, ), dtype=torch.float32))
@@ -123,11 +123,7 @@ class DWTNet(nn.Module):
 
 
 if __name__ == '__main__':
-    x = torch.randn(size=(10, 10, 1000))
-    raw_x11 = x[0][0]
-    #plt.plot(raw_x11)
-    model = DWTNet(levels=1)
-    res = model(x).detach().numpy()
-    print(res[0][0])
-    #plt.plot(res[0][0])
-    #plt.show()
+    x = torch.randn(size=(10, 10, 200))
+    model = DWTLayer(levels=1)
+    res = model(x)
+    print(res.shape)
