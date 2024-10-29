@@ -27,188 +27,6 @@ def convnxn(in_planes: int, out_planes: int, kernel_size: Union[T, Tuple[T]], st
         raise Exception('No such stride, please select only 1 or 2 for stride value.')
 
 
-# ===================== I2CBottleNeck ==========================
-class I2CBottleNeck(nn.Module):
-    def __init__(
-            self,
-            in_planes: int,
-            stride: int = 1,
-            groups: int = 11,
-            expansion_rate: int = 3,
-            norm_layer: Optional[Callable[..., nn.Module]] = None
-    ) -> None:
-        """
-        input shape: (B, C, N)
-        output shape: (B, C*reduction*expansion, N) = (B, C, N) in out paper
-        """
-        super(I2CBottleNeck, self).__init__()
-        self.in_planes = in_planes
-        self.reduction_rate = 1 / 3
-        self.groups = groups
-        self.expansion_rate = expansion_rate
-        self.stride = stride
-        if norm_layer is None:
-            norm_layer = nn.BatchNorm1d
-
-        self.I2CBlock1x1_1 = I2CBlockv2(
-            in_planes=in_planes,
-            rate=self.reduction_rate,
-            intra_kernel_size=1,
-            inter_kernel_size=1,
-            stride=1,
-            groups=self.groups,
-            ac_flag=False
-        )
-        self.bn1 = norm_layer(int(self.in_planes * self.reduction_rate))
-
-        self.I2CBlock3x3 = I2CBlockv2(
-            in_planes=int(self.in_planes * self.reduction_rate),
-            rate=1,
-            intra_kernel_size=3,
-            inter_kernel_size=1,
-            stride=1,
-            groups=self.groups,
-            ac_flag=False
-        )
-        self.bn2 = norm_layer(int(self.in_planes * self.reduction_rate))
-
-        self.I2CBlock1x1_2 = I2CBlockv2(
-            in_planes=int(self.in_planes * self.reduction_rate),
-            rate=self.expansion_rate,
-            intra_kernel_size=1,
-            inter_kernel_size=1,
-            stride=1,
-            groups=self.groups,
-            ac_flag=False
-        )
-        self.bn3 = norm_layer(int(self.in_planes * self.reduction_rate) * self.expansion_rate)
-
-        self.act = nn.SELU(inplace=True)
-        self.dropout = nn.Dropout(0.05)
-
-        if stride != 1 or in_planes != int(self.in_planes * self.reduction_rate) * self.expansion_rate:
-            self.downsample = nn.Sequential(
-                convnxn(in_planes, int(self.in_planes * self.reduction_rate) * self.expansion_rate, kernel_size=1, stride=stride, groups=groups),
-                norm_layer(int(self.in_planes * self.reduction_rate) * self.expansion_rate)
-            )
-        else:
-            self.downsample = None
-
-        self._init_weights()
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        identity = x
-        out = self.I2CBlock1x1_1(x)
-        out = self.bn1(out)
-        out = self.I2CBlock3x3(out)
-        out = self.bn2(out)
-        out = self.dropout(out)
-        out = self.I2CBlock1x1_2(out)
-        out = self.bn3(out)
-        if self.downsample is not None:
-            identity = self.downsample(x)
-        out += identity
-        out = self.act(out)
-        return out
-
-    def _init_weights(self):
-        for m in self.modules():
-            if isinstance(m, nn.Conv1d):
-                nn.init.kaiming_normal_(m.weight.data)
-                if m.bias is not None:
-                    m.bias.data.zero_()
-            elif isinstance(m, nn.BatchNorm1d):
-                m.weight.data.fill_(1)
-                m.bias.data.zero_()
-            elif isinstance(m, nn.Sequential):
-                for n in m:
-                    if isinstance(n, nn.Conv1d):
-                        nn.init.kaiming_normal_(n.weight.data)
-                        if n.bias is not None:
-                            n.bias.data.zero_()
-                    elif isinstance(n, nn.BatchNorm1d):
-                        n.weight.data.fill_(1)
-                        n.bias.data.zero_()
-
-
-class BottleNeck(nn.Module):
-    def __init__(
-            self,
-            in_planes: int,
-            stride: int = 1,
-            groups: int = 11,
-            expansion_rate: int = 3,
-            norm_layer: Optional[Callable[..., nn.Module]] = None
-    ):
-        super(BottleNeck, self).__init__()
-        self.reduction_rate = 1 / 3
-        self.groups = groups
-        self.stride = stride
-        self.expansion = expansion_rate
-        if norm_layer is None:
-            norm_layer = nn.BatchNorm1d
-
-        self.conv1x1_1 = convnxn(in_planes, int(in_planes * self.reduction_rate), kernel_size=1, stride=1, groups=groups)
-        self.bn1 = norm_layer(int(in_planes * self.reduction_rate))
-        self.conv3x3 = convnxn(int(in_planes * self.reduction_rate), int(in_planes * self.reduction_rate), kernel_size=3, stride=stride, groups=groups)
-        self.bn2 = norm_layer(int(in_planes * self.reduction_rate))
-        self.conv1x1_2 = convnxn(int(in_planes * self.reduction_rate), int(in_planes * self.reduction_rate) * self.expansion, kernel_size=1, stride=1, groups=groups)
-        self.bn3 = norm_layer(int(in_planes * self.reduction_rate) * self.expansion)
-        self.act = nn.SELU(inplace=True)
-        self.dropout = nn.Dropout(0.05)
-        if stride != 1 or in_planes != int(in_planes * self.reduction_rate) * self.expansion:
-            self.downsample = nn.Sequential(
-                convnxn(in_planes, int(in_planes * self.reduction_rate) * self.expansion, kernel_size=1, stride=stride, groups=groups),
-                norm_layer(int(in_planes * self.reduction_rate) * self.expansion)
-            )
-        else:
-            self.downsample = None
-
-        self._init_weights()
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-
-        identity = x
-
-        out = self.conv1x1_1(x)
-        out = self.bn1(out)
-
-        out = self.conv3x3(out)
-        out = self.bn2(out)
-
-        out = self.dropout(out)
-
-        out = self.conv1x1_2(out)
-        out = self.bn3(out)
-
-        if self.downsample is not None:
-            identity = self.downsample(x)
-
-        out += identity
-        out = self.act(out)
-
-        return out
-
-    def _init_weights(self):
-        for m in self.modules():
-            if isinstance(m, nn.Conv1d):
-                nn.init.kaiming_normal_(m.weight.data)
-                if m.bias is not None:
-                    m.bias.data.zero_()
-            elif isinstance(m, nn.BatchNorm1d):
-                m.weight.data.fill_(1)
-                m.bias.data.zero_()
-            elif isinstance(m, nn.Sequential):
-                for n in m:
-                    if isinstance(n, nn.Conv1d):
-                        nn.init.kaiming_normal_(n.weight.data)
-                        if n.bias is not None:
-                            n.bias.data.zero_()
-                    elif isinstance(n, nn.BatchNorm1d):
-                        n.weight.data.fill_(1)
-                        n.bias.data.zero_()
-
-
 # ===================== I2CBlock ===========================
 class I2CBlockv1(nn.Module):
 
@@ -392,7 +210,7 @@ class I2CBlockv2(nn.Module):
                 m.bias.data.zero_()
 
 
-# ===================== I2CMSE ==========================
+# ===================== I2CMSE Block =======================
 class I2CMSE(nn.Module):
 
     def __init__(
@@ -418,75 +236,16 @@ class I2CMSE(nn.Module):
         self.b2_size = b2_size
         self.b3_size = b3_size
 
-        self.branch1_1 = I2CBlockv2(
-            in_planes=in_planes,
-            expansion_rate=self.expansion,
-            intra_kernel_size=self.b1_size,
-            inter_kernel_size=1,
-            stride=1,
-            groups=self.groups,
-            ac_flag=False,
-            fft=fft,
-            dwt=dwt
-        )
-        self.branch1_2 = I2CBlockv2(
-            in_planes=in_planes * self.expansion,
-            expansion_rate=1,
-            intra_kernel_size=self.b1_size,
-            inter_kernel_size=1,
-            stride=1,
-            groups=self.groups,
-            ac_flag=True,
-            fft=fft,
-            dwt=dwt
-        )
+        self.branch1_1 = I2CBlockv2(in_planes=in_planes, expansion_rate=self.expansion, intra_kernel_size=self.b1_size, inter_kernel_size=1, stride=1, groups=self.groups, ac_flag=False, fft=fft, dwt=dwt)
+        self.branch1_2 = I2CBlockv2(in_planes=in_planes*self.expansion, expansion_rate=1, intra_kernel_size=self.b1_size, inter_kernel_size=1, stride=1, groups=self.groups, ac_flag=True, fft=fft, dwt=dwt)
 
-        self.branch2_1 = I2CBlockv2(
-            in_planes=in_planes,
-            expansion_rate=self.expansion,
-            intra_kernel_size=self.b2_size,
-            inter_kernel_size=1,
-            stride=1,
-            groups=self.groups,
-            ac_flag=False,
-            fft=fft,
-            dwt=dwt
-        )
-        self.branch2_2 = I2CBlockv2(
-            in_planes=in_planes * self.expansion,
-            expansion_rate=1,
-            intra_kernel_size=self.b2_size,
-            inter_kernel_size=1,
-            stride=1,
-            groups=self.groups,
-            ac_flag=True,
-            fft=fft,
-            dwt=dwt
-        )
+        self.branch2_1 = I2CBlockv2(in_planes=in_planes, expansion_rate=self.expansion, intra_kernel_size=self.b2_size, inter_kernel_size=1, stride=1, groups=self.groups, ac_flag=False, fft=fft, dwt=dwt)
+        self.branch2_2 = I2CBlockv2(in_planes=in_planes*self.expansion, expansion_rate=1, intra_kernel_size=self.b2_size, inter_kernel_size=1, stride=1, groups=self.groups, ac_flag=True, fft=fft, dwt=dwt)
 
-        self.branch3_1 = I2CBlockv2(
-            in_planes=in_planes,
-            expansion_rate=self.expansion,
-            intra_kernel_size=self.b3_size,
-            inter_kernel_size=1,
-            stride=1,
-            groups=self.groups,
-            ac_flag=False,
-            fft=fft,
-            dwt=dwt
-        )
-        self.branch3_2 = I2CBlockv2(
-            in_planes=in_planes * self.expansion,
-            expansion_rate=1,
-            intra_kernel_size=self.b3_size,
-            inter_kernel_size=1,
-            stride=1,
-            groups=self.groups,
-            ac_flag=True,
-            fft=fft,
-            dwt=dwt
-        )
+        self.branch3_1 = I2CBlockv2(in_planes=in_planes, expansion_rate=self.expansion, intra_kernel_size=self.b3_size, inter_kernel_size=1, stride=1, groups=self.groups, ac_flag=False, fft=fft, dwt=dwt)
+        self.branch3_2 = I2CBlockv2(in_planes=in_planes*self.expansion, expansion_rate=1, intra_kernel_size=self.b3_size, inter_kernel_size=1, stride=1, groups=self.groups, ac_flag=True, fft=fft, dwt=dwt)
 
+        self.shrinkage = convnxn(3*in_planes*self.expansion, in_planes*self.expansion, kernel_size=3, stride=1, groups=self.groups)
         self._init_weights()
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -511,6 +270,7 @@ class I2CMSE(nn.Module):
             for i in range(self.groups)]
 
         out = torch.cat(outputs, 1)
+        out = self.shrinkage(out)
         return out
 
     def _init_weights(self):
@@ -523,66 +283,64 @@ class I2CMSE(nn.Module):
                 m.weight.data.fill_(1)
                 m.bias.data.zero_()
 
+# ===================== Rearrange ==========================
+class Rearrange(nn.Module):
 
-# ===================== Cell of I2CNet ==========================
-class Cell(nn.Module):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+    def forward(x):
+        return x
+
+# ===================== UFBlock ============================
+class UFBlock(nn.Module):
 
     def __init__(
             self,
-            in_planes: int = 10,
-            groups : int = 10,
-            mse_b1: int = 5,
-            mse_b2: int = 11,
-            mse_b3: int = 21,
-            expansion_rate: int = 2,
-            nums: int = 1,
-            skip: bool = False,
-            fft: bool = True,
-            dwt: bool = True
-    ) -> None:
-        super(Cell, self).__init__()
-        self.in_planes = in_planes
-        self.groups = groups
-        self.mse_b1 = mse_b1
-        self.mse_b2 = mse_b2
-        self.mse_b3 = mse_b3
-        self.expansion_rate = expansion_rate
-        self.cells = self._make_cells(nums)
-        self.skip = skip
-        self.fft = fft
-        self.dwt = dwt
+            in_channels,
+            length,
+            groups,
+            expansion_rate,
+    ):
+        super(UFBlock, self).__init__()
+        self.intra_fft_branch = FFTLayer(dim=in_channels, length=length)
+        self.intra_dwt_branch = DWTLayer(levels=1)
+        self.rearrange1 = Rearrange()
+        self.intra_intra_conv = nn.Conv1d(in_channels=in_channels, out_channels=expansion_rate*in_channels, kernel_size=3, groups=groups)
+        self.intra_inter_conv = nn.Conv1d(in_channels=in_channels, out_channels=expansion_rate, kernel_size=3, groups=1)
+        
+        self.inter_fft_branch = FFTLayer(dim=10, length=length)
+        self.inter_dwt_branch = DWTLayer(levels=1)
+        self.rearrange2 = Rearrange()
+        self.inter_inter_conv = nn.Conv1d(in_channels=in_channels, out_channels=in_channels*expansion_rate, kernel_size=3, groups=1)
+        self.calibration = nn.Sequential([
+            nn.Conv1d(in_channels=in_channels, out_channels=expansion_rate, kernel_size=3, groups=1),
+            nn.BatchNorm1d(expansion_rate),
+            nn.SELU(inplace=True)
+        ])
 
-    def _make_cells(self, nums: int) -> nn.Sequential:
-        layers = []
-        for i in range(nums):
-            layers.append(I2CMSE(
-                in_planes=self.in_planes,
-                groups=self.groups,
-                b1_size=self.mse_b1,
-                b2_size=self.mse_b2,
-                b3_size=self.mse_b3,
-                expansion_rate=self.expansion_rate,
-                fft=self.fft,
-                dwt=self.dwt
-            ))
-            self.in_planes = self.in_planes * self.expansion_rate * 3
-            layers.append(BottleNeck(
-                in_planes=self.in_planes,
-                groups=self.groups
-            ))
-        return nn.Sequential(*layers)
+    def forward(self, x):
+        intra_X = x[:, :, :]
+        inter_X = x[:, :, :]
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        if self.skip:
-            residual = x
-            out = self.cells(x)
-            if residual.shape != out.shape:
-                residual = nn.Conv1d(residual.shape[1], out.shape[1], kernel_size=1)(residual)
-                residual = nn.BatchNorm1d(out.shape[1])(residual)
-            out += residual
-            return nn.SELU(inplace=True)(out)
-        else:
-            return self.cells(x)
+        intra_dwt_f = self.intra_dwt_branch(intra_X)
+        intra_fft_f = self.intra_fft_branch(intra_X)
+        intra_branch_f = torch.concatenate([intra_dwt_f, intra_fft_f, intra_X], dim=1)
+        intra_branch_f = self.rearrange1(intra_branch_f)
+        Intra_output = self.intra_intra_conv(intra_branch_f)
+        intra_branch_inter_f = self.intra_inter_conv(intra_branch_f)
+
+        inter_dwt_f = self.inter_dwt_branch(inter_X)
+        inter_fft_f = self.inter_fft_branch(inter_X)
+        inter_branch_f = torch.concatenate([inter_dwt_f, inter_fft_f, inter_X], dim=1)
+        inter_branch_f = self.rearrange2(inter_branch_f)
+        inter_branch_inter_f = self.inter_inter_conv(inter_branch_f)
+        Inter_output = torch.concatenate([intra_branch_inter_f, inter_branch_inter_f])
+        Inter_output = self.calibration(Inter_output)
+
+        output = torch.concatenate([Intra_output, Inter_output], dim=1)
+
+        return output
 
 
 # =================== I2CNet ======================
@@ -694,7 +452,10 @@ class I2CNet(nn.Module):
 
 
 if __name__ == '__main__':
-    x = torch.randn(size=(10, 20, 100))
-    model = I2CMSE(in_planes=20, groups=10, b1_size=5, b2_size=11, b3_size=21, expansion_rate=2, fft=False, dwt=True)
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    x = torch.randn(size=(32, 20, 100))
+    x = x.to(device=device)
+    model = I2CMSE(in_planes=20, groups=10, b1_size=5, b2_size=11, b3_size=21, expansion_rate=1, fft=True, dwt=False)
+    model.to(device=device)
     res = model(x)
     print(res.shape)
