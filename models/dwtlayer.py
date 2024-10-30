@@ -15,11 +15,12 @@ class DWT1DForward(nn.Module):
         mode: str = 'zero'
     ) -> None:
         super().__init__()
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         wave = pywt.Wavelet(wave)
         low_pass, high_pass = wave.dec_lo, wave.dec_hi
         filters = depo.prep_filt_afb1d(h0=low_pass, h1=high_pass)
-        self.h0 = filters[0]
-        self.h1 = filters[1]
+        self.h0 = filters[0].to(device)
+        self.h1 = filters[1].to(device)
         self.levels = levels
         self.mode = mode
 
@@ -66,12 +67,13 @@ class DWT1DInverse(nn.Module):
         mode: str = 'zero'
     ) -> None:
         super().__init__()
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         wave = pywt.Wavelet(wave)
         low_pass, high_pass = wave.dec_lo, wave.dec_hi
         # Prepare the filters
         filters = depo.prep_filt_sfb1d(low_pass, high_pass)
-        self.g0 = filters[0]
-        self.g1 = filters[1]
+        self.g0 = filters[0].to(device)
+        self.g1 = filters[1].to(device)
         self.mode = mode
 
     def forward(self, coeffs: Tuple[torch.Tensor, List]) -> torch.Tensor:

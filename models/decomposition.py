@@ -1,4 +1,5 @@
 import torch
+import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
 from torch.autograd import Function
@@ -181,6 +182,7 @@ def afb1d(x, h0, h1, mode='zero', dim=-1):
             pad = (p//2, 0) if d == 2 else (0, p//2)
             # Calculate the high and lowpass
             lohi = F.conv2d(x, h, padding=pad, stride=s, groups=C)
+
         elif mode == 'symmetric' or mode == 'reflect' or mode == 'periodic':
             pad = (0, 0, p//2, (p+1)//2) if d == 2 else (p//2, (p+1)//2, 0, 0)
             x = mypad(x, pad=pad, mode=mode)

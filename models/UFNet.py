@@ -100,8 +100,8 @@ class I2CBlockv2(nn.Module):
             length: int = 100,
             norm_layer: Optional[Callable[..., nn.Module]] = None,
             ac_flag: bool = True,
-            fft: bool = True,
-            dwt: bool = True
+            fft: bool = False,
+            dwt: bool = False
     ):
         """
         input size: [B, C, N]
@@ -220,10 +220,10 @@ class I2CMSE(nn.Module):
             b1_size: int = 5,
             b2_size: int = 11,
             b3_size: int = 21,
-            expansion_rate: int = 2,
+            expansion_rate: int = 1,
             norm_layer: Optional[Callable[..., nn.Module]] = None,
-            fft: bool = True,
-            dwt: bool = True
+            fft: bool = False,
+            dwt: bool = False
     ) -> None:
         super(I2CMSE, self).__init__()
         if norm_layer is None:
@@ -283,169 +283,175 @@ class I2CMSE(nn.Module):
                 m.weight.data.fill_(1)
                 m.bias.data.zero_()
 
+
 # ===================== Rearrange ==========================
 class Rearrange(nn.Module):
 
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-
-    def forward(x):
-        return x
+    def __init__(self, group_width, groups):
+        super(Rearrange, self).__init__()
+        self.group_width = group_width
+        self.groups = groups
+        
+    def forward(self, dwt, fft, raw):
+        outputs = [
+            torch.cat([dwt[:,
+                       int(i * self.group_width):int((i + 1) * self.group_width), :],
+                       fft[:,
+                       int(i * self.group_width):int((i + 1) * self.group_width), :],
+                       raw[:,
+                       int(i * self.group_width):int((i + 1) * self.group_width), :]],
+                      1)
+            for i in range(self.groups)]
+        return torch.cat(outputs, 1)
 
 # ===================== UFBlock ============================
 class UFBlock(nn.Module):
 
     def __init__(
             self,
-            in_channels,
-            length,
-            groups,
-            expansion_rate,
+            in_planes: int,
+            length: int,
+            groups: int,
+            expansion_rate: int,
+            intra_kernel_size: int = 3,
+            inter_kernel_size: int = 1
     ):
         super(UFBlock, self).__init__()
-        self.intra_fft_branch = FFTLayer(dim=in_channels, length=length)
+        self.in_planes = in_planes
+        self.groups = groups
+        self.group_width = int(in_planes / groups)
+
         self.intra_dwt_branch = DWTLayer(levels=1)
-        self.rearrange1 = Rearrange()
-        self.intra_intra_conv = nn.Conv1d(in_channels=in_channels, out_channels=expansion_rate*in_channels, kernel_size=3, groups=groups)
-        self.intra_inter_conv = nn.Conv1d(in_channels=in_channels, out_channels=expansion_rate, kernel_size=3, groups=1)
+        self.intra_fft_branch = FFTLayer(dim=self.group_width*(self.groups-1), length=length)
+        self.rearrange1 = Rearrange(group_width=self.group_width, groups=self.groups-1)
+
+        # self.intra_intra_conv = nn.Conv1d(in_channels=in_planes, out_channels=expansion_rate*in_planes, kernel_size=intra_kernel_size, groups=groups)
+        # self.intra_inter_conv = nn.Conv1d(in_channels=in_planes, out_channels=expansion_rate, kernel_size=inter_kernel_size, groups=1)
         
-        self.inter_fft_branch = FFTLayer(dim=10, length=length)
         self.inter_dwt_branch = DWTLayer(levels=1)
-        self.rearrange2 = Rearrange()
-        self.inter_inter_conv = nn.Conv1d(in_channels=in_channels, out_channels=in_channels*expansion_rate, kernel_size=3, groups=1)
-        self.calibration = nn.Sequential([
-            nn.Conv1d(in_channels=in_channels, out_channels=expansion_rate, kernel_size=3, groups=1),
-            nn.BatchNorm1d(expansion_rate),
-            nn.SELU(inplace=True)
-        ])
+        self.inter_fft_branch = FFTLayer(dim=self.group_width*1, length=length)
+        self.rearrange2 = Rearrange(group_width=self.group_width, groups=1)
+
+        # self.inter_inter_conv = nn.Conv1d(in_channels=in_planes, out_channels=in_planes*expansion_rate, kernel_size=inter_kernel_size, groups=1)
+        # self.calibration = nn.Sequential([
+        #     nn.Conv1d(in_channels=in_planes, out_channels=expansion_rate, kernel_size=inter_kernel_size, groups=1),
+        #     nn.BatchNorm1d(expansion_rate),
+        #     nn.SELU(inplace=True)
+        # ])
 
     def forward(self, x):
-        intra_X = x[:, :, :]
-        inter_X = x[:, :, :]
+        intra_X = x[:, :self.group_width*(self.groups-1), :]
+        print(intra_X.shape)
+        inter_X = x[:, self.group_width*(self.groups-1):, :]
+        print(inter_X.shape)
 
         intra_dwt_f = self.intra_dwt_branch(intra_X)
         intra_fft_f = self.intra_fft_branch(intra_X)
-        intra_branch_f = torch.concatenate([intra_dwt_f, intra_fft_f, intra_X], dim=1)
-        intra_branch_f = self.rearrange1(intra_branch_f)
-        Intra_output = self.intra_intra_conv(intra_branch_f)
-        intra_branch_inter_f = self.intra_inter_conv(intra_branch_f)
+        # intra_branch_f = torch.cat([intra_dwt_f, intra_fft_f, intra_X], 1)
 
-        inter_dwt_f = self.inter_dwt_branch(inter_X)
-        inter_fft_f = self.inter_fft_branch(inter_X)
-        inter_branch_f = torch.concatenate([inter_dwt_f, inter_fft_f, inter_X], dim=1)
-        inter_branch_f = self.rearrange2(inter_branch_f)
-        inter_branch_inter_f = self.inter_inter_conv(inter_branch_f)
-        Inter_output = torch.concatenate([intra_branch_inter_f, inter_branch_inter_f])
-        Inter_output = self.calibration(Inter_output)
+        outputs = self.rearrange1(intra_dwt_f, intra_fft_f, intra_X)
 
-        output = torch.concatenate([Intra_output, Inter_output], dim=1)
 
-        return output
+        # intra_branch_f = self.rearrange1(intra_branch_f)
+        # Intra_output = self.intra_intra_conv(intra_branch_f)
+        # intra_branch_inter_f = self.intra_inter_conv(intra_branch_f)
+
+        # inter_dwt_f = self.inter_dwt_branch(inter_X)
+        # inter_fft_f = self.inter_fft_branch(inter_X)
+        # inter_branch_f = torch.concat([inter_dwt_f, inter_fft_f, inter_X], 1)
+        # inter_branch_f = self.rearrange2(inter_branch_f)
+        # inter_branch_inter_f = self.inter_inter_conv(inter_branch_f)
+        # Inter_output = torch.concat([intra_branch_inter_f, inter_branch_inter_f])
+        # Inter_output = self.calibration(Inter_output)
+
+        # output = torch.concat([Intra_output, Inter_output], 1)
+
+        return outputs
 
 
 # =================== I2CNet ======================
-class I2CNet(nn.Module):
+class UFNet(nn.Module):
 
     def __init__(
             self,
             in_planes: int = 10,
+            length: int = 100,
             num_classes: int = 52,
             mse_b1: int = 5,
             mse_b2: int = 11,
             mse_b3: int = 21,
-            expansion_rate: int = 2,
-            cell1_num: int = 1,
-            cell2_num: int = 1,
+            mse_expansions: list = [1, 1, 1],
+            uf_expansions: list = [1, 1, 1],
             norm_layer: Optional[Callable[..., nn.Module]] = None,
-            fft: bool = True,
-            dwt: bool = True
+            fft_flag: bool = False,
+            dwt_flag: bool = False
     ) -> None:
-        super().__init__()
+        super(UFNet, self).__init__()
         if norm_layer is None:
             norm_layer = nn.BatchNorm1d
 
         self.groups = in_planes
-        self.mse_expansion = expansion_rate
+        self.mse_expansions = mse_expansions
 
-        self.conv1 = I2CBlockv1(
-            in_planes=in_planes,
-            expansion_rate=1,
-            intra_kernel_size=3,
-            inter_kernel_size=1,
-            groups=self.groups
-        )
+        self.conv1 = I2CBlockv1(in_planes=in_planes, expansion_rate=1, intra_kernel_size=3, inter_kernel_size=1, groups=self.groups)
 
         self.in_planes = in_planes + 1
         self.groups += 1
 
-        self.cell1 = Cell(
-            in_planes=self.in_planes,
-            groups=self.groups,
-            mse_b1=mse_b1,
-            mse_b2=mse_b2,
-            mse_b3=mse_b3,
-            expansion_rate=self.mse_expansion,
-            nums=cell1_num,
-            skip=False,
-            fft=fft,
-            dwt=dwt
-        )
-        self.in_planes = self.cell1.in_planes
+        self.mse1 = I2CMSE(in_planes=self.in_planes, groups=self.groups, b1_size=mse_b1, b2_size=mse_b2, b3_size=mse_b3, expansion_rate=self.mse_expansions[0], fft=fft_flag, dwt=dwt_flag)
+        self.mse2 = I2CMSE(in_planes=self.in_planes*self.mse_expansions[0], groups=self.groups, b1_size=mse_b1, b2_size=mse_b2, b3_size=mse_b3, expansion_rate=self.mse_expansions[1], fft=fft_flag, dwt=dwt_flag)
+        self.mse3 = I2CMSE(in_planes=self.in_planes*self.mse_expansions[0]*self.mse_expansions[1], groups=self.groups, b1_size=mse_b1, b2_size=mse_b2, b3_size=mse_b3, expansion_rate=self.mse_expansions[2], fft=fft_flag, dwt=dwt_flag)
 
-        self.cell2 = Cell(
-            in_planes=self.in_planes,
-            groups=self.groups,
-            mse_b1=mse_b1,
-            mse_b2=mse_b2,
-            mse_b3=mse_b3,
-            expansion_rate=self.mse_expansion,
-            nums=cell2_num,
-            skip=False,
-            fft=fft,
-            dwt=dwt
-        )
-        self.in_planes = self.cell2.in_planes
+        self.mse1_out_planes = self.in_planes * self.mse_expansions[0]
+        self.mse2_out_planes = self.in_planes * self.mse_expansions[0] * self.mse_expansions[1]
+        self.mse3_out_planes = self.in_planes * self.mse_expansions[0] * self.mse_expansions[1] * self.mse_expansions[2]
 
-        self.out_planes = self.in_planes
-        self.adaptiveAvgPool1d = nn.AdaptiveAvgPool1d(50)
+        self.uf1 = UFBlock(in_planes=self.mse3_out_planes, length=length, groups=self.groups, expansion_rate=1)
+        # self.uf2 = UFBlock()
+        # self.uf3 = UFBlock()
+        
+        # self.adaptiveAvgPool1d = nn.AdaptiveAvgPool1d(50)
 
         # decision layers
-        self.dc_conv1 = nn.Conv1d(self.out_planes, num_classes, kernel_size=1)
-        self.dc_bn1 = nn.BatchNorm1d(num_classes)
-        self.dc_se1 = nn.SELU()
+        # self.dc_conv1 = nn.Conv1d(self.out_planes, num_classes, kernel_size=1)
+        # self.dc_bn1 = nn.BatchNorm1d(num_classes)
+        # self.dc_se1 = nn.SELU()
 
-        self.dc_conv2 = nn.Conv1d(num_classes, 64, kernel_size=1)
-        self.dc_bn2 = nn.BatchNorm1d(64)
-        self.dc_se2 = nn.SELU()
+        # self.dc_conv2 = nn.Conv1d(num_classes, 64, kernel_size=1)
+        # self.dc_bn2 = nn.BatchNorm1d(64)
+        # self.dc_se2 = nn.SELU()
 
-        self.dc_conv3 = nn.Conv1d(64, num_classes, kernel_size=1)
-        self.dc_bn3 = nn.BatchNorm1d(num_classes)
+        # self.dc_conv3 = nn.Conv1d(64, num_classes, kernel_size=1)
+        # self.dc_bn3 = nn.BatchNorm1d(num_classes)
 
-        self.adaptiveAvgPool1d_2 = nn.AdaptiveAvgPool1d(1)
+        # self.adaptiveAvgPool1d_2 = nn.AdaptiveAvgPool1d(1)
 
     def _forward_imp(self, x: torch.Tensor):
 
         out = self.conv1(x)
 
-        out = self.cell1(out)
-        out = self.cell2(out)
-        out = self.adaptiveAvgPool1d(out)
+        mse1_out = self.mse1(out)
+        mse2_out = self.mse2(mse1_out)
+        mse3_out = self.mse3(mse2_out)
 
-        feature_out = self.dc_conv1(out)
-        out = self.dc_bn1(feature_out)
-        out = self.dc_se1(out)
+        uf1_out = self.uf1(mse3_out)
+        # out = self.adaptiveAvgPool1d(out)
 
-        embedded_out = self.dc_conv2(out)
-        out = self.dc_bn2(embedded_out)
-        out = self.dc_se2(out)
+        # feature_out = self.dc_conv1(out)
+        # out = self.dc_bn1(feature_out)
+        # out = self.dc_se1(out)
 
-        out = self.dc_conv3(out)
-        out = self.dc_bn3(out)
+        # embedded_out = self.dc_conv2(out)
+        # out = self.dc_bn2(embedded_out)
+        # out = self.dc_se2(out)
 
-        out = self.adaptiveAvgPool1d_2(out)
-        out = torch.flatten(out, 1)
+        # out = self.dc_conv3(out)
+        # out = self.dc_bn3(out)
 
-        return out
+        # out = self.adaptiveAvgPool1d_2(out)
+        # out = torch.flatten(out, 1)
+
+        return uf1_out
 
     def forward(self, x: torch.Tensor):
         return self._forward_imp(x)
@@ -453,9 +459,9 @@ class I2CNet(nn.Module):
 
 if __name__ == '__main__':
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    x = torch.randn(size=(32, 20, 100))
+    x = torch.randn(size=(32, 10, 100))
     x = x.to(device=device)
-    model = I2CMSE(in_planes=20, groups=10, b1_size=5, b2_size=11, b3_size=21, expansion_rate=1, fft=True, dwt=False)
+    model = UFNet(in_planes=10, mse_expansions=[1, 1, 1], fft_flag=True, dwt_flag=True)
     model.to(device=device)
-    res = model(x)
-    print(res.shape)
+    res1 = model(x)
+    print(res1.shape)
