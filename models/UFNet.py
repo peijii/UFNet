@@ -121,9 +121,9 @@ class I2CBlockv2(nn.Module):
             norm_layer = nn.BatchNorm1d
 
         if self.fft and not self.dwt:
-            self.inter_tsp1 = FFTLayer(dim=int(self.group_width * (self.groups - 1)), length=length)
-            self.inter_tsp2 = FFTLayer(dim=int(self.group_width * (self.e + 1)), length=length)
-            self.intra_tsp1 = FFTLayer(dim=int(self.group_width * (self.groups - 1)), length=length)
+            self.inter_tsp1 = FFTLayer(in_planes=int(self.group_width * (self.groups - 1)), length=length)
+            self.inter_tsp2 = FFTLayer(in_planes=int(self.group_width * (self.e + 1)), length=length)
+            self.intra_tsp1 = FFTLayer(in_planes=int(self.group_width * (self.groups - 1)), length=length)
 
         elif not self.fft and self.dwt:
             self.inter_tsp1 = DWTLayer(levels=1)
@@ -131,9 +131,9 @@ class I2CBlockv2(nn.Module):
             self.intra_tsp1 = DWTLayer(levels=1)
 
         elif self.fft and self.dwt:
-            self.inter_tsp1 = nn.Sequential(DWTLayer(levels=1), FFTLayer(dim=int(self.group_width * (self.groups - 1)), length=length))
-            self.inter_tsp2 = nn.Sequential(DWTLayer(levels=1), FFTLayer(dim=int(self.group_width * (self.e + 1)), length=length))
-            self.intra_tsp1 = nn.Sequential(DWTLayer(levels=1), FFTLayer(dim=int(self.group_width * (self.groups - 1)), length=length))
+            self.inter_tsp1 = nn.Sequential(DWTLayer(levels=1), FFTLayer(in_planes=int(self.group_width * (self.groups - 1)), length=length))
+            self.inter_tsp2 = nn.Sequential(DWTLayer(levels=1), FFTLayer(in_planes=int(self.group_width * (self.e + 1)), length=length))
+            self.intra_tsp1 = nn.Sequential(DWTLayer(levels=1), FFTLayer(in_planes=int(self.group_width * (self.groups - 1)), length=length))
         else:
             pass
 
@@ -304,69 +304,153 @@ class Rearrange(nn.Module):
             for i in range(self.groups)]
         return torch.cat(outputs, 1)
 
+
 # ===================== UFBlock ============================
 class UFBlock(nn.Module):
 
     def __init__(
             self,
-            in_planes: int,
-            length: int,
-            groups: int,
-            expansion_rate: int,
+            in_planes: int = 1,
+            in_planes1: int = 1,
+            in_planes2: int = 1,
+            length: int = 100,
+            groups: int = 11,
+            expansion_rate: int = 1,
             intra_kernel_size: int = 3,
-            inter_kernel_size: int = 1
+            inter_kernel_size: int = 1,
+            skip_connection: bool = False
     ):
         super(UFBlock, self).__init__()
-        self.in_planes = in_planes
         self.groups = groups
-        self.group_width = int(in_planes / groups)
+        self.skip_connection = skip_connection
 
-        self.intra_dwt_branch = DWTLayer(levels=1)
-        self.intra_fft_branch = FFTLayer(dim=self.group_width*(self.groups-1), length=length)
-        self.rearrange1 = Rearrange(group_width=self.group_width, groups=self.groups-1)
+        if not self.skip_connection:
+            self.in_planes = in_planes
+            self.group_width = int(in_planes / groups)
+            self.pre_exp_rate = int(self.in_planes / groups)
 
-        # self.intra_intra_conv = nn.Conv1d(in_channels=in_planes, out_channels=expansion_rate*in_planes, kernel_size=intra_kernel_size, groups=groups)
-        # self.intra_inter_conv = nn.Conv1d(in_channels=in_planes, out_channels=expansion_rate, kernel_size=inter_kernel_size, groups=1)
+            self.intra_dwt_branch = DWTLayer(levels=1)
+            self.intra_fft_branch = FFTLayer(in_planes=self.group_width*(self.groups-1), length=length)
+            self.rearrange1 = Rearrange(group_width=self.group_width, groups=self.groups-1)
+            # in_channel of the intra_conv branch should be "3*self.group_width*(self.groups-1)", where 3 represents the concatnate results of dwt, fft, and raw.
+            self.intra_intra_conv = convnxn(in_planes=3*self.group_width*(self.groups-1), out_planes=3*self.group_width*(self.groups-1), kernel_size=intra_kernel_size, groups=self.groups-1)
+            self.intra_inter_conv = convnxn(in_planes=3*self.group_width*(self.groups-1), out_planes=self.pre_exp_rate, kernel_size=inter_kernel_size, groups=1)
+            
+            self.inter_dwt_branch = DWTLayer(levels=1)
+            self.inter_fft_branch = FFTLayer(in_planes=self.group_width*1, length=length)
+            self.rearrange2 = Rearrange(group_width=self.group_width, groups=1)
+            self.inter_inter_conv = nn.Conv1d(in_channels=3*self.group_width*1, out_channels=self.pre_exp_rate, kernel_size=inter_kernel_size, groups=1)
+
+            self.calibration = nn.Sequential(
+                convnxn(in_planes=self.pre_exp_rate*2, out_planes=3*self.pre_exp_rate, kernel_size=inter_kernel_size, groups=1),
+                nn.BatchNorm1d(3*self.pre_exp_rate),
+                nn.SELU(inplace=True))
+            
+            self.shrinkage = convnxn(in_planes=3*(self.group_width*(self.groups-1)+self.pre_exp_rate), out_planes=(self.group_width*(self.groups-1)+self.pre_exp_rate)*expansion_rate, kernel_size=3, groups=self.groups)
+
+        else:
+            self.in_planes1 = in_planes1
+            self.group_width1 = int(in_planes1 / groups)
+            self.in_planes2 = in_planes2
+            self.group_width2 = int(in_planes2 / groups)
+            self.in_planes = self.in_planes1 + self.in_planes2
+            self.group_width = self.group_width1 + self.group_width2
+            self.pre_exp_rate = int(self.in_planes / groups)
+
+            self.intra_dwt_branch = DWTLayer(levels=1)
+            self.intra_fft_branch = FFTLayer(in_planes=self.group_width*(self.groups-1), length=length)
+            self.rearrange1 = Rearrange(group_width=self.group_width, groups=self.groups-1)
+            # in_channel of the intra_conv branch should be "3*self.group_width*(self.groups-1)", where 3 represents the concatnate results of dwt, fft, and raw.
+            self.intra_intra_conv = convnxn(in_planes=3*self.group_width*(self.groups-1), out_planes=3*self.group_width*(self.groups-1), kernel_size=intra_kernel_size, groups=self.groups-1)
+            self.intra_inter_conv = convnxn(in_planes=3*self.group_width*(self.groups-1), out_planes=self.pre_exp_rate, kernel_size=inter_kernel_size, groups=1)
+            
+            self.inter_dwt_branch = DWTLayer(levels=1)
+            self.inter_fft_branch = FFTLayer(in_planes=self.group_width*1, length=length)
+            self.rearrange2 = Rearrange(group_width=self.group_width, groups=1)
+            self.inter_inter_conv = nn.Conv1d(in_channels=3*self.group_width*1, out_channels=self.pre_exp_rate, kernel_size=inter_kernel_size, groups=1)
+
+            self.calibration = nn.Sequential(
+                convnxn(in_planes=self.pre_exp_rate*2, out_planes=3*self.pre_exp_rate, kernel_size=inter_kernel_size, groups=1),
+                nn.BatchNorm1d(3*self.pre_exp_rate),
+                nn.SELU(inplace=True))
+            
+            self.shrinkage = convnxn(in_planes=3*(self.group_width*(self.groups-1)+self.pre_exp_rate), out_planes=(self.group_width*(self.groups-1)+self.pre_exp_rate)*expansion_rate, kernel_size=3, groups=self.groups)
         
-        self.inter_dwt_branch = DWTLayer(levels=1)
-        self.inter_fft_branch = FFTLayer(dim=self.group_width*1, length=length)
-        self.rearrange2 = Rearrange(group_width=self.group_width, groups=1)
+        self._init_weights()
 
-        # self.inter_inter_conv = nn.Conv1d(in_channels=in_planes, out_channels=in_planes*expansion_rate, kernel_size=inter_kernel_size, groups=1)
-        # self.calibration = nn.Sequential([
-        #     nn.Conv1d(in_channels=in_planes, out_channels=expansion_rate, kernel_size=inter_kernel_size, groups=1),
-        #     nn.BatchNorm1d(expansion_rate),
-        #     nn.SELU(inplace=True)
-        # ])
+    def _forward_w_skip(self, x1: torch.Tensor, x2=None):
+        if x2 is None or not isinstance(x2, torch.Tensor):
+            raise ValueError("x2 must be provided as a valid tensor when skip_connection is enabled.")
+        x = [
+            torch.cat([x1[:,
+                       int(i * self.group_width1):int((i + 1) * self.group_width1), :],
+                       x2[:,
+                       int(i * self.group_width2):int((i + 1) * self.group_width2), :]],
+                      1)
+            for i in range(self.groups)]
+        
+        x = torch.cat(x, 1)
 
-    def forward(self, x):
         intra_X = x[:, :self.group_width*(self.groups-1), :]
-        print(intra_X.shape)
         inter_X = x[:, self.group_width*(self.groups-1):, :]
-        print(inter_X.shape)
 
         intra_dwt_f = self.intra_dwt_branch(intra_X)
         intra_fft_f = self.intra_fft_branch(intra_X)
-        # intra_branch_f = torch.cat([intra_dwt_f, intra_fft_f, intra_X], 1)
+        intra_cat_output = self.rearrange1(intra_dwt_f, intra_fft_f, intra_X)
+        Intra_output = self.intra_intra_conv(intra_cat_output)
+        Intra_inter_output = self.intra_inter_conv(intra_cat_output)
 
-        outputs = self.rearrange1(intra_dwt_f, intra_fft_f, intra_X)
+        inter_dwt_f = self.inter_dwt_branch(inter_X)
+        inter_fft_f = self.inter_fft_branch(inter_X)
+        inter_cat_output = self.rearrange2(inter_dwt_f, inter_fft_f, inter_X)
+        Inter_inter_output = self.inter_inter_conv(inter_cat_output)
 
+        Inter_output = torch.cat([Intra_inter_output, Inter_inter_output], 1)
+        Inter_output = self.calibration(Inter_output)
 
-        # intra_branch_f = self.rearrange1(intra_branch_f)
-        # Intra_output = self.intra_intra_conv(intra_branch_f)
-        # intra_branch_inter_f = self.intra_inter_conv(intra_branch_f)
+        output = self.shrinkage(torch.concat([Intra_output, Inter_output], 1))
 
-        # inter_dwt_f = self.inter_dwt_branch(inter_X)
-        # inter_fft_f = self.inter_fft_branch(inter_X)
-        # inter_branch_f = torch.concat([inter_dwt_f, inter_fft_f, inter_X], 1)
-        # inter_branch_f = self.rearrange2(inter_branch_f)
-        # inter_branch_inter_f = self.inter_inter_conv(inter_branch_f)
-        # Inter_output = torch.concat([intra_branch_inter_f, inter_branch_inter_f])
-        # Inter_output = self.calibration(Inter_output)
+        return output
 
-        # output = torch.concat([Intra_output, Inter_output], 1)
+    def _forward_wo_skip(self, x: torch.Tensor):
+        intra_X = x[:, :self.group_width*(self.groups-1), :]
+        inter_X = x[:, self.group_width*(self.groups-1):, :]
 
-        return outputs
+        intra_dwt_f = self.intra_dwt_branch(intra_X)
+        intra_fft_f = self.intra_fft_branch(intra_X)
+        intra_cat_output = self.rearrange1(intra_dwt_f, intra_fft_f, intra_X)
+        Intra_output = self.intra_intra_conv(intra_cat_output)
+        Intra_inter_output = self.intra_inter_conv(intra_cat_output)
+
+        inter_dwt_f = self.inter_dwt_branch(inter_X)
+        inter_fft_f = self.inter_fft_branch(inter_X)
+        inter_cat_output = self.rearrange2(inter_dwt_f, inter_fft_f, inter_X)
+        Inter_inter_output = self.inter_inter_conv(inter_cat_output)
+
+        Inter_output = torch.cat([Intra_inter_output, Inter_inter_output], 1)
+        Inter_output = self.calibration(Inter_output)
+
+        output = self.shrinkage(torch.concat([Intra_output, Inter_output], 1))
+
+        return output
+
+    def forward(self, x1: torch.Tensor, x2=None):
+        if self.skip_connection:
+            if x2 is None or not isinstance(x2, torch.Tensor):
+                raise ValueError("x2 must be provided as a valid tensor when skip_connection is enabled.")
+            return self._forward_w_skip(x1, x2)
+        else:
+            return self._forward_wo_skip(x1)
+    
+    def _init_weights(self):
+        for m in self.modules():
+            if isinstance(m, nn.Conv1d):
+                nn.init.kaiming_normal_(m.weight.data)
+                if m.bias is not None:
+                    m.bias.data.zero_()
+            elif isinstance(m, nn.BatchNorm1d):
+                m.weight.data.fill_(1)
+                m.weight.data.zero_()
 
 
 # =================== I2CNet ======================
@@ -382,9 +466,10 @@ class UFNet(nn.Module):
             mse_b3: int = 21,
             mse_expansions: list = [1, 1, 1],
             uf_expansions: list = [1, 1, 1],
+            skip_connection: bool = False,
             norm_layer: Optional[Callable[..., nn.Module]] = None,
-            fft_flag: bool = False,
-            dwt_flag: bool = False
+            mse_fft_flag: bool = False,
+            mse_dwt_flag: bool = False
     ) -> None:
         super(UFNet, self).__init__()
         if norm_layer is None:
@@ -392,24 +477,30 @@ class UFNet(nn.Module):
 
         self.groups = in_planes
         self.mse_expansions = mse_expansions
+        self.uf_expansions = uf_expansions
+        self.skip_connection = skip_connection
 
         self.conv1 = I2CBlockv1(in_planes=in_planes, expansion_rate=1, intra_kernel_size=3, inter_kernel_size=1, groups=self.groups)
 
         self.in_planes = in_planes + 1
         self.groups += 1
 
-        self.mse1 = I2CMSE(in_planes=self.in_planes, groups=self.groups, b1_size=mse_b1, b2_size=mse_b2, b3_size=mse_b3, expansion_rate=self.mse_expansions[0], fft=fft_flag, dwt=dwt_flag)
-        self.mse2 = I2CMSE(in_planes=self.in_planes*self.mse_expansions[0], groups=self.groups, b1_size=mse_b1, b2_size=mse_b2, b3_size=mse_b3, expansion_rate=self.mse_expansions[1], fft=fft_flag, dwt=dwt_flag)
-        self.mse3 = I2CMSE(in_planes=self.in_planes*self.mse_expansions[0]*self.mse_expansions[1], groups=self.groups, b1_size=mse_b1, b2_size=mse_b2, b3_size=mse_b3, expansion_rate=self.mse_expansions[2], fft=fft_flag, dwt=dwt_flag)
-
+        self.mse1 = I2CMSE(in_planes=self.in_planes, groups=self.groups, b1_size=mse_b1, b2_size=mse_b2, b3_size=mse_b3, expansion_rate=self.mse_expansions[0], fft=mse_fft_flag, dwt=mse_dwt_flag)
+        self.mse2 = I2CMSE(in_planes=self.in_planes*self.mse_expansions[0], groups=self.groups, b1_size=mse_b1, b2_size=mse_b2, b3_size=mse_b3, expansion_rate=self.mse_expansions[1], fft=mse_fft_flag, dwt=mse_dwt_flag)
+        self.mse3 = I2CMSE(in_planes=self.in_planes*self.mse_expansions[0]*self.mse_expansions[1], groups=self.groups, b1_size=mse_b1, b2_size=mse_b2, b3_size=mse_b3, expansion_rate=self.mse_expansions[2], fft=mse_fft_flag, dwt=mse_dwt_flag)
         self.mse1_out_planes = self.in_planes * self.mse_expansions[0]
         self.mse2_out_planes = self.in_planes * self.mse_expansions[0] * self.mse_expansions[1]
         self.mse3_out_planes = self.in_planes * self.mse_expansions[0] * self.mse_expansions[1] * self.mse_expansions[2]
 
-        self.uf1 = UFBlock(in_planes=self.mse3_out_planes, length=length, groups=self.groups, expansion_rate=1)
-        # self.uf2 = UFBlock()
-        # self.uf3 = UFBlock()
-        
+        if not self.skip_connection:
+            self.uf1 = UFBlock(in_planes=self.mse3_out_planes, length=length, groups=self.groups, expansion_rate=self.uf_expansions[0], skip_connection=False)
+            self.uf2 = UFBlock(in_planes=self.mse3_out_planes*self.uf_expansions[0], length=length, groups=self.groups, expansion_rate=self.uf_expansions[1], skip_connection=False)
+            self.uf3 = UFBlock(in_planes=self.mse3_out_planes*self.uf_expansions[0]*self.uf_expansions[1], length=length, groups=self.groups, expansion_rate=self.uf_expansions[2], skip_connection=False)
+        else:
+            self.uf1 = UFBlock(in_planes=self.mse3_out_planes, length=length, groups=self.groups, expansion_rate=self.uf_expansions[0], skip_connection=False)
+            self.uf2 = UFBlock(in_planes1=self.mse3_out_planes*self.uf_expansions[0], in_planes2=self.mse2_out_planes, length=length, groups=self.groups, expansion_rate=self.uf_expansions[1], skip_connection=True)
+            self.uf3 = UFBlock(in_planes1=self.mse3_out_planes*self.uf_expansions[0]*self.uf_expansions[1]+self.mse2_out_planes, in_planes2=self.mse1_out_planes, length=length, groups=self.groups, expansion_rate=self.uf_expansions[2], skip_connection=True)
+
         # self.adaptiveAvgPool1d = nn.AdaptiveAvgPool1d(50)
 
         # decision layers
@@ -426,15 +517,16 @@ class UFNet(nn.Module):
 
         # self.adaptiveAvgPool1d_2 = nn.AdaptiveAvgPool1d(1)
 
-    def _forward_imp(self, x: torch.Tensor):
-
+    def _forward_wo_skip(self, x: torch.Tensor):
         out = self.conv1(x)
 
         mse1_out = self.mse1(out)
         mse2_out = self.mse2(mse1_out)
         mse3_out = self.mse3(mse2_out)
 
-        uf1_out = self.uf1(mse3_out)
+        out = self.uf1(mse3_out)
+        out = self.uf2(out)
+        out = self.uf3(out)
         # out = self.adaptiveAvgPool1d(out)
 
         # feature_out = self.dc_conv1(out)
@@ -450,18 +542,33 @@ class UFNet(nn.Module):
 
         # out = self.adaptiveAvgPool1d_2(out)
         # out = torch.flatten(out, 1)
+        return out
+    
+    def _forward_w_skip(self, x: torch.Tensor):
+        out = self.conv1(x)
 
-        return uf1_out
+        mse1_out = self.mse1(out)
+        mse2_out = self.mse2(mse1_out)
+        mse3_out = self.mse3(mse2_out)
+
+        out = self.uf1(mse3_out)
+        out = self.uf2(out, mse2_out)
+        out = self.uf3(out, mse1_out)
+
+        return out
 
     def forward(self, x: torch.Tensor):
-        return self._forward_imp(x)
+        if self.skip_connection:
+            return self._forward_w_skip(x)
+        else:
+            return self._forward_wo_skip(x)
 
 
 if __name__ == '__main__':
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     x = torch.randn(size=(32, 10, 100))
     x = x.to(device=device)
-    model = UFNet(in_planes=10, mse_expansions=[1, 1, 1], fft_flag=True, dwt_flag=True)
+    model = UFNet(in_planes=10, mse_expansions=[2, 2, 2], uf_expansions=[2, 2, 2], mse_fft_flag=True, mse_dwt_flag=True, skip_connection=True)
     model.to(device=device)
-    res1 = model(x)
-    print(res1.shape)
+    out = model(x)
+    print(out.shape)

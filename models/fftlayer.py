@@ -6,11 +6,11 @@ class FFTLayer(nn.Module):
 
     def __init__(
         self,
-        dim : int,
+        in_planes : int,
         length: int
     ):
         super(FFTLayer, self).__init__()
-        self.parameter = nn.Parameter(torch.randn(size=(dim, length, 2), dtype=torch.float32))
+        self.parameter = nn.Parameter(torch.randn(size=(in_planes, length, 2), dtype=torch.float32))
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         fft_x = torch.fft.fft(x, dim=2, norm='ortho')
