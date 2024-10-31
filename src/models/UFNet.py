@@ -26,7 +26,6 @@ def convnxn(in_planes: int, out_planes: int, kernel_size: Union[T, Tuple[T]], st
     else:
         raise Exception('No such stride, please select only 1 or 2 for stride value.')
 
-
 # ===================== I2CBlock ===========================
 class I2CBlockv1(nn.Module):
 
@@ -430,7 +429,7 @@ class UFBlock(nn.Module):
         Inter_output = torch.cat([Intra_inter_output, Inter_inter_output], 1)
         Inter_output = self.calibration(Inter_output)
 
-        output = self.shrinkage(torch.concat([Intra_output, Inter_output], 1))
+        output = self.shrinkage(torch.cat([Intra_output, Inter_output], 1))
 
         return output
 
@@ -496,26 +495,30 @@ class UFNet(nn.Module):
             self.uf1 = UFBlock(in_planes=self.mse3_out_planes, length=length, groups=self.groups, expansion_rate=self.uf_expansions[0], skip_connection=False)
             self.uf2 = UFBlock(in_planes=self.mse3_out_planes*self.uf_expansions[0], length=length, groups=self.groups, expansion_rate=self.uf_expansions[1], skip_connection=False)
             self.uf3 = UFBlock(in_planes=self.mse3_out_planes*self.uf_expansions[0]*self.uf_expansions[1], length=length, groups=self.groups, expansion_rate=self.uf_expansions[2], skip_connection=False)
+            out_planes = self.mse3_out_planes*self.uf_expansions[0]*self.uf_expansions[1]*self.uf_expansions[2]
+
         else:
             self.uf1 = UFBlock(in_planes=self.mse3_out_planes, length=length, groups=self.groups, expansion_rate=self.uf_expansions[0], skip_connection=False)
             self.uf2 = UFBlock(in_planes1=self.mse3_out_planes*self.uf_expansions[0], in_planes2=self.mse2_out_planes, length=length, groups=self.groups, expansion_rate=self.uf_expansions[1], skip_connection=True)
             self.uf3 = UFBlock(in_planes1=self.mse3_out_planes*self.uf_expansions[0]*self.uf_expansions[1]+self.mse2_out_planes, in_planes2=self.mse1_out_planes, length=length, groups=self.groups, expansion_rate=self.uf_expansions[2], skip_connection=True)
+            out_planes = (self.mse3_out_planes*self.uf_expansions[0]*self.uf_expansions[1]+self.mse2_out_planes + self.mse1_out_planes) * self.uf_expansions[2] + self.mse3_out_planes
 
-        # self.adaptiveAvgPool1d = nn.AdaptiveAvgPool1d(50)
+        self.calibration = nn.Sequential(DWTLayer(levels=1), FFTLayer(in_planes=out_planes, length=length))
+        self.adaptiveAvgPool1d = nn.AdaptiveAvgPool1d(50)
 
         # decision layers
-        # self.dc_conv1 = nn.Conv1d(self.out_planes, num_classes, kernel_size=1)
-        # self.dc_bn1 = nn.BatchNorm1d(num_classes)
-        # self.dc_se1 = nn.SELU()
+        self.decision_layers = nn.Sequential(
+            nn.Conv1d(out_planes, out_planes//2, kernel_size=1),
+            nn.BatchNorm1d(out_planes//2),
+            nn.SELU(inplace=True),
 
-        # self.dc_conv2 = nn.Conv1d(num_classes, 64, kernel_size=1)
-        # self.dc_bn2 = nn.BatchNorm1d(64)
-        # self.dc_se2 = nn.SELU()
+            nn.Conv1d(out_planes//2, out_planes//4, kernel_size=1),
+            nn.BatchNorm1d(out_planes//4),
+            nn.SELU(inplace=True),
 
-        # self.dc_conv3 = nn.Conv1d(64, num_classes, kernel_size=1)
-        # self.dc_bn3 = nn.BatchNorm1d(num_classes)
-
-        # self.adaptiveAvgPool1d_2 = nn.AdaptiveAvgPool1d(1)
+            nn.Conv1d(out_planes//4, num_classes, kernel_size=1),
+            nn.BatchNorm1d(num_classes),
+            nn.AdaptiveAvgPool1d(1))
 
     def _forward_wo_skip(self, x: torch.Tensor):
         out = self.conv1(x)
@@ -527,21 +530,10 @@ class UFNet(nn.Module):
         out = self.uf1(mse3_out)
         out = self.uf2(out)
         out = self.uf3(out)
-        # out = self.adaptiveAvgPool1d(out)
+        out = self.calibration(out)
+        out = self.adaptiveAvgPool1d(out)
+        out = self.decision_layers(out)
 
-        # feature_out = self.dc_conv1(out)
-        # out = self.dc_bn1(feature_out)
-        # out = self.dc_se1(out)
-
-        # embedded_out = self.dc_conv2(out)
-        # out = self.dc_bn2(embedded_out)
-        # out = self.dc_se2(out)
-
-        # out = self.dc_conv3(out)
-        # out = self.dc_bn3(out)
-
-        # out = self.adaptiveAvgPool1d_2(out)
-        # out = torch.flatten(out, 1)
         return out
     
     def _forward_w_skip(self, x: torch.Tensor):
@@ -554,21 +546,26 @@ class UFNet(nn.Module):
         out = self.uf1(mse3_out)
         out = self.uf2(out, mse2_out)
         out = self.uf3(out, mse1_out)
+        out = torch.cat([out, mse3_out], 1)
+
+        out = self.calibration(out)
+        out = self.adaptiveAvgPool1d(out)
+        out = self.decision_layers(out)
 
         return out
 
     def forward(self, x: torch.Tensor):
         if self.skip_connection:
-            return self._forward_w_skip(x)
+            return torch.flatten(self._forward_w_skip(x), 1)
         else:
-            return self._forward_wo_skip(x)
+            return torch.flatten(self._forward_wo_skip(x), 1)
 
 
 if __name__ == '__main__':
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     x = torch.randn(size=(32, 10, 100))
     x = x.to(device=device)
-    model = UFNet(in_planes=10, mse_expansions=[2, 2, 2], uf_expansions=[2, 2, 2], mse_fft_flag=True, mse_dwt_flag=True, skip_connection=True)
+    model = UFNet(in_planes=10, mse_expansions=[2, 1, 3], uf_expansions=[3, 2, 2], mse_fft_flag=True, mse_dwt_flag=True, skip_connection=False)
     model.to(device=device)
     out = model(x)
     print(out.shape)
