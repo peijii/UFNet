@@ -73,11 +73,11 @@ class CnnEncoder(nn.Module):
         return x
 
 
-if __name__ == '__main__':
-    x = torch.randn(size=(10, 10, 200))
-    plt.plot(x[0][0])
-    model = FFTLayer(in_planes=10, length=200, wfb_switch=True)
-    res = model(x)
-    plt.plot(res[0][0].detach().numpy())
-    plt.show()
-    print(res[0][0].detach().numpy())
+# if __name__ == '__main__':
+#     x = torch.randn(size=(10, 10, 200))
+#     plt.plot(x[0][0])
+#     model = FFTLayer(in_planes=10, length=200, wfb_switch=True)
+#     res = model(x)
+#     plt.plot(res[0][0].detach().numpy())
+#     plt.show()
+#     print(res[0][0].detach().numpy())

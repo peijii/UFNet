@@ -1,4 +1,3 @@
-import imp
 from typing import List, Tuple
 import torch.nn as nn
 import pywt
@@ -124,8 +123,8 @@ class DWTLayer(nn.Module):
         return x
 
 
-if __name__ == '__main__':
-    x = torch.randn(size=(10, 10, 200))
-    model = DWTLayer(levels=1)
-    res = model(x)
-    print(res.shape)
+# if __name__ == '__main__':
+#     x = torch.randn(size=(10, 10, 200))
+#     model = DWTLayer(levels=1)
+#     res = model(x)
+#     print(res.shape)
