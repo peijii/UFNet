@@ -565,7 +565,7 @@ if __name__ == '__main__':
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     x = torch.randn(size=(32, 10, 100))
     x = x.to(device=device)
-    model = UFNet(in_planes=10, mse_expansions=[2, 1, 3], uf_expansions=[3, 2, 2], mse_fft_flag=True, mse_dwt_flag=True, skip_connection=False)
+    model = UFNet(in_planes=10, mse_expansions=[2, 2, 3], uf_expansions=[3, 6, 2], mse_fft_flag=False, mse_dwt_flag=False, skip_connection=False)
     model.to(device=device)
     out = model(x)
     print(out.shape)
