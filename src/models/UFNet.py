@@ -1,6 +1,6 @@
 import torch
 import torch.nn as nn
-from fftlayer import FFTLayer
+from lfft import LFFT
 from dwtlayer import DWTLayer
 from typing import Union, TypeVar, Tuple, Optional, Callable
 
@@ -122,9 +122,9 @@ class I2CBlockv2(nn.Module):
             norm_layer = nn.BatchNorm1d
 
         if self.fft and not self.dwt:
-            self.inter_tsp1 = FFTLayer(in_planes=int(self.group_width * (self.groups - 1)), length=length, wfb_switch=wfb_switch)
-            self.inter_tsp2 = FFTLayer(in_planes=int(self.group_width * (self.e + 1)), length=length, wfb_switch=wfb_switch)
-            self.intra_tsp1 = FFTLayer(in_planes=int(self.group_width * (self.groups - 1)), length=length, wfb_switch=wfb_switch)
+            self.inter_tsp1 = LFFT(in_planes=int(self.group_width * (self.groups - 1)), length=length, wfb_switch=wfb_switch)
+            self.inter_tsp2 = LFFT(in_planes=int(self.group_width * (self.e + 1)), length=length, wfb_switch=wfb_switch)
+            self.intra_tsp1 = LFFT(in_planes=int(self.group_width * (self.groups - 1)), length=length, wfb_switch=wfb_switch)
 
         elif not self.fft and self.dwt:
             self.inter_tsp1 = DWTLayer(levels=1)
@@ -132,9 +132,9 @@ class I2CBlockv2(nn.Module):
             self.intra_tsp1 = DWTLayer(levels=1)
 
         elif self.fft and self.dwt:
-            self.inter_tsp1 = nn.Sequential(DWTLayer(levels=1), FFTLayer(in_planes=int(self.group_width * (self.groups - 1)), length=length, wfb_switch=wfb_switch, filter_nums=filter_nums))
-            self.inter_tsp2 = nn.Sequential(DWTLayer(levels=1), FFTLayer(in_planes=int(self.group_width * (self.e + 1)), length=length, wfb_switch=wfb_switch, filter_nums=filter_nums))
-            self.intra_tsp1 = nn.Sequential(DWTLayer(levels=1), FFTLayer(in_planes=int(self.group_width * (self.groups - 1)), length=length, wfb_switch=wfb_switch, filter_nums=filter_nums))
+            self.inter_tsp1 = nn.Sequential(DWTLayer(levels=1), LFFT(in_planes=int(self.group_width * (self.groups - 1)), length=length, wfb_switch=wfb_switch, filter_nums=filter_nums))
+            self.inter_tsp2 = nn.Sequential(DWTLayer(levels=1), LFFT(in_planes=int(self.group_width * (self.e + 1)), length=length, wfb_switch=wfb_switch, filter_nums=filter_nums))
+            self.intra_tsp1 = nn.Sequential(DWTLayer(levels=1), LFFT(in_planes=int(self.group_width * (self.groups - 1)), length=length, wfb_switch=wfb_switch, filter_nums=filter_nums))
         else:
             pass
 
@@ -335,14 +335,14 @@ class UFBlock(nn.Module):
             self.pre_exp_rate = int(self.in_planes / groups)
 
             self.intra_dwt_branch = DWTLayer(levels=1)
-            self.intra_fft_branch = FFTLayer(in_planes=self.group_width*(self.groups-1), length=length, wfb_switch=wfb_switch, filter_nums=filter_nums)
+            self.intra_fft_branch = LFFT(in_planes=self.group_width*(self.groups-1), length=length, wfb_switch=wfb_switch, filter_nums=filter_nums)
             self.rearrange1 = Rearrange(group_width=self.group_width, groups=self.groups-1)
             # in_channel of the intra_conv branch should be "3*self.group_width*(self.groups-1)", where 3 represents the concatnate results of dwt, fft, and raw.
             self.intra_intra_conv = convnxn(in_planes=3*self.group_width*(self.groups-1), out_planes=3*self.group_width*(self.groups-1), kernel_size=intra_kernel_size, groups=self.groups-1)
             self.intra_inter_conv = convnxn(in_planes=3*self.group_width*(self.groups-1), out_planes=self.pre_exp_rate, kernel_size=inter_kernel_size, groups=1)
             
             self.inter_dwt_branch = DWTLayer(levels=1)
-            self.inter_fft_branch = FFTLayer(in_planes=self.group_width*1, length=length, wfb_switch=wfb_switch, filter_nums=filter_nums)
+            self.inter_fft_branch = LFFT(in_planes=self.group_width*1, length=length, wfb_switch=wfb_switch, filter_nums=filter_nums)
             self.rearrange2 = Rearrange(group_width=self.group_width, groups=1)
             self.inter_inter_conv = nn.Conv1d(in_channels=3*self.group_width*1, out_channels=self.pre_exp_rate, kernel_size=inter_kernel_size, groups=1)
 
@@ -363,14 +363,14 @@ class UFBlock(nn.Module):
             self.pre_exp_rate = int(self.in_planes / groups)
 
             self.intra_dwt_branch = DWTLayer(levels=1)
-            self.intra_fft_branch = FFTLayer(in_planes=self.group_width*(self.groups-1), length=length, wfb_switch=wfb_switch, filter_nums=filter_nums)
+            self.intra_fft_branch = LFFT(in_planes=self.group_width*(self.groups-1), length=length, wfb_switch=wfb_switch, filter_nums=filter_nums)
             self.rearrange1 = Rearrange(group_width=self.group_width, groups=self.groups-1)
             # in_channel of the intra_conv branch should be "3*self.group_width*(self.groups-1)", where 3 represents the concatnate results of dwt, fft, and raw.
             self.intra_intra_conv = convnxn(in_planes=3*self.group_width*(self.groups-1), out_planes=3*self.group_width*(self.groups-1), kernel_size=intra_kernel_size, groups=self.groups-1)
             self.intra_inter_conv = convnxn(in_planes=3*self.group_width*(self.groups-1), out_planes=self.pre_exp_rate, kernel_size=inter_kernel_size, groups=1)
             
             self.inter_dwt_branch = DWTLayer(levels=1)
-            self.inter_fft_branch = FFTLayer(in_planes=self.group_width*1, length=length, wfb_switch=wfb_switch, filter_nums=filter_nums)
+            self.inter_fft_branch = LFFT(in_planes=self.group_width*1, length=length, wfb_switch=wfb_switch, filter_nums=filter_nums)
             self.rearrange2 = Rearrange(group_width=self.group_width, groups=1)
             self.inter_inter_conv = nn.Conv1d(in_channels=3*self.group_width*1, out_channels=self.pre_exp_rate, kernel_size=inter_kernel_size, groups=1)
 
@@ -511,7 +511,7 @@ class UFNet(nn.Module):
             self.uf3 = UFBlock(in_planes1=self.mse3_out_planes*self.uf_expansions[0]*self.uf_expansions[1]+self.mse2_out_planes, in_planes2=self.mse1_out_planes, length=length, groups=self.groups, expansion_rate=self.uf_expansions[2], wfb_switch=wfb_switch, filter_nums=filter_nums, skip_connection=True)
             out_planes = (self.mse3_out_planes*self.uf_expansions[0]*self.uf_expansions[1]+self.mse2_out_planes + self.mse1_out_planes) * self.uf_expansions[2] + self.mse3_out_planes
 
-        self.calibration = nn.Sequential(DWTLayer(levels=1), FFTLayer(in_planes=out_planes, length=length, wfb_switch=wfb_switch))
+        self.calibration = nn.Sequential(DWTLayer(levels=1), LFFT(in_planes=out_planes, length=length, wfb_switch=wfb_switch))
         self.adaptiveAvgPool1d = nn.AdaptiveAvgPool1d(50)
 
         # decision layers

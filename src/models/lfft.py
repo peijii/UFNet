@@ -25,7 +25,7 @@ def convnxn(in_planes: int, out_planes: int, kernel_size: Union[T, Tuple[T]], st
         raise Exception('No such stride, please select only 1 or 2 for stride value.')
 
 
-class FFTLayer(nn.Module):
+class LFFT(nn.Module):
 
     def __init__(
         self,
@@ -34,7 +34,7 @@ class FFTLayer(nn.Module):
         wfb_switch: bool = False,
         filter_nums: int = 3
     ):
-        super(FFTLayer, self).__init__()
+        super(LFFT, self).__init__()
         self.wfb_switch = wfb_switch
         self.filter_nums = filter_nums
         if not self.wfb_switch:
@@ -92,8 +92,9 @@ class GroupConv(nn.Module):
         x = self.act(x)
         x = self.conv2(x)
         x = self.sigmoid(x)
-        _, C, _ = x.shape
-        x = torch.split(x, int(C / self.filter_nums), dim=1)
+        #_, C, _ = x.shape
+        #x = torch.split(x, int(C / self.filter_nums), dim=1)
+        x = torch.chunk(x, self.filter_nums, dim=1)
         x = [i for i in x]
         x = torch.cat([x[i] * w[i] for i in range(self.filter_nums)], dim=1)
         return x
@@ -102,7 +103,7 @@ class GroupConv(nn.Module):
 if __name__ == '__main__':
     x = torch.randn(size=(10, 10, 200))
     plt.plot(x[0][0])
-    model = FFTLayer(in_planes=10, length=200, wfb_switch=True, filter_nums=3)
+    model = LFFT(in_planes=10, length=200, wfb_switch=True, filter_nums=3)
     res = model(x)
     plt.plot(res[0][0].detach().numpy())
     plt.show()
