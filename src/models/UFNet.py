@@ -101,7 +101,8 @@ class I2CBlockv2(nn.Module):
             ac_flag: bool = True,
             fft: bool = False,
             dwt: bool = False,
-            wfb_switch: bool = False
+            wfb_switch: bool = False,
+            filter_nums: int = 3
     ):
         """
         input size: [B, C, N]
@@ -131,9 +132,9 @@ class I2CBlockv2(nn.Module):
             self.intra_tsp1 = DWTLayer(levels=1)
 
         elif self.fft and self.dwt:
-            self.inter_tsp1 = nn.Sequential(DWTLayer(levels=1), FFTLayer(in_planes=int(self.group_width * (self.groups - 1)), length=length, wfb_switch=wfb_switch))
-            self.inter_tsp2 = nn.Sequential(DWTLayer(levels=1), FFTLayer(in_planes=int(self.group_width * (self.e + 1)), length=length, wfb_switch=wfb_switch))
-            self.intra_tsp1 = nn.Sequential(DWTLayer(levels=1), FFTLayer(in_planes=int(self.group_width * (self.groups - 1)), length=length, wfb_switch=wfb_switch))
+            self.inter_tsp1 = nn.Sequential(DWTLayer(levels=1), FFTLayer(in_planes=int(self.group_width * (self.groups - 1)), length=length, wfb_switch=wfb_switch, filter_nums=filter_nums))
+            self.inter_tsp2 = nn.Sequential(DWTLayer(levels=1), FFTLayer(in_planes=int(self.group_width * (self.e + 1)), length=length, wfb_switch=wfb_switch, filter_nums=filter_nums))
+            self.intra_tsp1 = nn.Sequential(DWTLayer(levels=1), FFTLayer(in_planes=int(self.group_width * (self.groups - 1)), length=length, wfb_switch=wfb_switch, filter_nums=filter_nums))
         else:
             pass
 
@@ -224,7 +225,8 @@ class I2CMSE(nn.Module):
             norm_layer: Optional[Callable[..., nn.Module]] = None,
             fft: bool = False,
             dwt: bool = False,
-            wfb_switch: bool = False
+            wfb_switch: bool = False,
+            filter_nums: int = 3
     ) -> None:
         super(I2CMSE, self).__init__()
         if norm_layer is None:
@@ -237,14 +239,14 @@ class I2CMSE(nn.Module):
         self.b2_size = b2_size
         self.b3_size = b3_size
 
-        self.branch1_1 = I2CBlockv2(in_planes=in_planes, expansion_rate=self.expansion, intra_kernel_size=self.b1_size, inter_kernel_size=1, stride=1, groups=self.groups, ac_flag=False, fft=fft, dwt=dwt, wfb_switch=wfb_switch)
-        self.branch1_2 = I2CBlockv2(in_planes=in_planes*self.expansion, expansion_rate=1, intra_kernel_size=self.b1_size, inter_kernel_size=1, stride=1, groups=self.groups, ac_flag=True, fft=fft, dwt=dwt, wfb_switch=wfb_switch)
+        self.branch1_1 = I2CBlockv2(in_planes=in_planes, expansion_rate=self.expansion, intra_kernel_size=self.b1_size, inter_kernel_size=1, stride=1, groups=self.groups, ac_flag=False, fft=fft, dwt=dwt, wfb_switch=wfb_switch, filter_nums=filter_nums)
+        self.branch1_2 = I2CBlockv2(in_planes=in_planes*self.expansion, expansion_rate=1, intra_kernel_size=self.b1_size, inter_kernel_size=1, stride=1, groups=self.groups, ac_flag=True, fft=fft, dwt=dwt, wfb_switch=wfb_switch, filter_nums=filter_nums)
 
-        self.branch2_1 = I2CBlockv2(in_planes=in_planes, expansion_rate=self.expansion, intra_kernel_size=self.b2_size, inter_kernel_size=1, stride=1, groups=self.groups, ac_flag=False, fft=fft, dwt=dwt, wfb_switch=wfb_switch)
-        self.branch2_2 = I2CBlockv2(in_planes=in_planes*self.expansion, expansion_rate=1, intra_kernel_size=self.b2_size, inter_kernel_size=1, stride=1, groups=self.groups, ac_flag=True, fft=fft, dwt=dwt, wfb_switch=wfb_switch)
+        self.branch2_1 = I2CBlockv2(in_planes=in_planes, expansion_rate=self.expansion, intra_kernel_size=self.b2_size, inter_kernel_size=1, stride=1, groups=self.groups, ac_flag=False, fft=fft, dwt=dwt, wfb_switch=wfb_switch, filter_nums=filter_nums)
+        self.branch2_2 = I2CBlockv2(in_planes=in_planes*self.expansion, expansion_rate=1, intra_kernel_size=self.b2_size, inter_kernel_size=1, stride=1, groups=self.groups, ac_flag=True, fft=fft, dwt=dwt, wfb_switch=wfb_switch, filter_nums=filter_nums)
 
-        self.branch3_1 = I2CBlockv2(in_planes=in_planes, expansion_rate=self.expansion, intra_kernel_size=self.b3_size, inter_kernel_size=1, stride=1, groups=self.groups, ac_flag=False, fft=fft, dwt=dwt, wfb_switch=wfb_switch)
-        self.branch3_2 = I2CBlockv2(in_planes=in_planes*self.expansion, expansion_rate=1, intra_kernel_size=self.b3_size, inter_kernel_size=1, stride=1, groups=self.groups, ac_flag=True, fft=fft, dwt=dwt, wfb_switch=wfb_switch)
+        self.branch3_1 = I2CBlockv2(in_planes=in_planes, expansion_rate=self.expansion, intra_kernel_size=self.b3_size, inter_kernel_size=1, stride=1, groups=self.groups, ac_flag=False, fft=fft, dwt=dwt, wfb_switch=wfb_switch, filter_nums=filter_nums)
+        self.branch3_2 = I2CBlockv2(in_planes=in_planes*self.expansion, expansion_rate=1, intra_kernel_size=self.b3_size, inter_kernel_size=1, stride=1, groups=self.groups, ac_flag=True, fft=fft, dwt=dwt, wfb_switch=wfb_switch, filter_nums=filter_nums)
 
         self.shrinkage = convnxn(3*in_planes*self.expansion, in_planes*self.expansion, kernel_size=3, stride=1, groups=self.groups)
         self._init_weights()
@@ -320,6 +322,7 @@ class UFBlock(nn.Module):
             intra_kernel_size: int = 3,
             inter_kernel_size: int = 1,
             wfb_switch: bool = False,
+            filter_nums: int = 3,
             skip_connection: bool = False
     ):
         super(UFBlock, self).__init__()
@@ -332,14 +335,14 @@ class UFBlock(nn.Module):
             self.pre_exp_rate = int(self.in_planes / groups)
 
             self.intra_dwt_branch = DWTLayer(levels=1)
-            self.intra_fft_branch = FFTLayer(in_planes=self.group_width*(self.groups-1), length=length, wfb_switch=wfb_switch)
+            self.intra_fft_branch = FFTLayer(in_planes=self.group_width*(self.groups-1), length=length, wfb_switch=wfb_switch, filter_nums=filter_nums)
             self.rearrange1 = Rearrange(group_width=self.group_width, groups=self.groups-1)
             # in_channel of the intra_conv branch should be "3*self.group_width*(self.groups-1)", where 3 represents the concatnate results of dwt, fft, and raw.
             self.intra_intra_conv = convnxn(in_planes=3*self.group_width*(self.groups-1), out_planes=3*self.group_width*(self.groups-1), kernel_size=intra_kernel_size, groups=self.groups-1)
             self.intra_inter_conv = convnxn(in_planes=3*self.group_width*(self.groups-1), out_planes=self.pre_exp_rate, kernel_size=inter_kernel_size, groups=1)
             
             self.inter_dwt_branch = DWTLayer(levels=1)
-            self.inter_fft_branch = FFTLayer(in_planes=self.group_width*1, length=length, wfb_switch=wfb_switch)
+            self.inter_fft_branch = FFTLayer(in_planes=self.group_width*1, length=length, wfb_switch=wfb_switch, filter_nums=filter_nums)
             self.rearrange2 = Rearrange(group_width=self.group_width, groups=1)
             self.inter_inter_conv = nn.Conv1d(in_channels=3*self.group_width*1, out_channels=self.pre_exp_rate, kernel_size=inter_kernel_size, groups=1)
 
@@ -360,14 +363,14 @@ class UFBlock(nn.Module):
             self.pre_exp_rate = int(self.in_planes / groups)
 
             self.intra_dwt_branch = DWTLayer(levels=1)
-            self.intra_fft_branch = FFTLayer(in_planes=self.group_width*(self.groups-1), length=length, wfb_switch=wfb_switch)
+            self.intra_fft_branch = FFTLayer(in_planes=self.group_width*(self.groups-1), length=length, wfb_switch=wfb_switch, filter_nums=filter_nums)
             self.rearrange1 = Rearrange(group_width=self.group_width, groups=self.groups-1)
             # in_channel of the intra_conv branch should be "3*self.group_width*(self.groups-1)", where 3 represents the concatnate results of dwt, fft, and raw.
             self.intra_intra_conv = convnxn(in_planes=3*self.group_width*(self.groups-1), out_planes=3*self.group_width*(self.groups-1), kernel_size=intra_kernel_size, groups=self.groups-1)
             self.intra_inter_conv = convnxn(in_planes=3*self.group_width*(self.groups-1), out_planes=self.pre_exp_rate, kernel_size=inter_kernel_size, groups=1)
             
             self.inter_dwt_branch = DWTLayer(levels=1)
-            self.inter_fft_branch = FFTLayer(in_planes=self.group_width*1, length=length, wfb_switch=wfb_switch)
+            self.inter_fft_branch = FFTLayer(in_planes=self.group_width*1, length=length, wfb_switch=wfb_switch, filter_nums=filter_nums)
             self.rearrange2 = Rearrange(group_width=self.group_width, groups=1)
             self.inter_inter_conv = nn.Conv1d(in_channels=3*self.group_width*1, out_channels=self.pre_exp_rate, kernel_size=inter_kernel_size, groups=1)
 
@@ -472,7 +475,8 @@ class UFNet(nn.Module):
             norm_layer: Optional[Callable[..., nn.Module]] = None,
             mse_fft_flag: bool = False,
             mse_dwt_flag: bool = False,
-            wfb_switch: bool = False
+            wfb_switch: bool = False,
+            filter_nums: int = 3
     ) -> None:
         super(UFNet, self).__init__()
         if norm_layer is None:
@@ -488,23 +492,23 @@ class UFNet(nn.Module):
         self.in_planes = in_planes + 1
         self.groups += 1
 
-        self.mse1 = I2CMSE(in_planes=self.in_planes, groups=self.groups, b1_size=mse_b1, b2_size=mse_b2, b3_size=mse_b3, expansion_rate=self.mse_expansions[0], fft=mse_fft_flag, dwt=mse_dwt_flag, wfb_switch=False)
-        self.mse2 = I2CMSE(in_planes=self.in_planes*self.mse_expansions[0], groups=self.groups, b1_size=mse_b1, b2_size=mse_b2, b3_size=mse_b3, expansion_rate=self.mse_expansions[1], fft=mse_fft_flag, dwt=mse_dwt_flag, wfb_switch=False)
-        self.mse3 = I2CMSE(in_planes=self.in_planes*self.mse_expansions[0]*self.mse_expansions[1], groups=self.groups, b1_size=mse_b1, b2_size=mse_b2, b3_size=mse_b3, expansion_rate=self.mse_expansions[2], fft=mse_fft_flag, dwt=mse_dwt_flag, wfb_switch=False)
+        self.mse1 = I2CMSE(in_planes=self.in_planes, groups=self.groups, b1_size=mse_b1, b2_size=mse_b2, b3_size=mse_b3, expansion_rate=self.mse_expansions[0], fft=mse_fft_flag, dwt=mse_dwt_flag, wfb_switch=False, filter_nums=filter_nums)
+        self.mse2 = I2CMSE(in_planes=self.in_planes*self.mse_expansions[0], groups=self.groups, b1_size=mse_b1, b2_size=mse_b2, b3_size=mse_b3, expansion_rate=self.mse_expansions[1], fft=mse_fft_flag, dwt=mse_dwt_flag, wfb_switch=False, filter_nums=filter_nums)
+        self.mse3 = I2CMSE(in_planes=self.in_planes*self.mse_expansions[0]*self.mse_expansions[1], groups=self.groups, b1_size=mse_b1, b2_size=mse_b2, b3_size=mse_b3, expansion_rate=self.mse_expansions[2], fft=mse_fft_flag, dwt=mse_dwt_flag, wfb_switch=False, filter_nums=filter_nums)
         self.mse1_out_planes = self.in_planes * self.mse_expansions[0]
         self.mse2_out_planes = self.in_planes * self.mse_expansions[0] * self.mse_expansions[1]
         self.mse3_out_planes = self.in_planes * self.mse_expansions[0] * self.mse_expansions[1] * self.mse_expansions[2]
 
         if not self.skip_connection:
-            self.uf1 = UFBlock(in_planes=self.mse3_out_planes, length=length, groups=self.groups, expansion_rate=self.uf_expansions[0], wfb_switch=wfb_switch, skip_connection=False)
-            self.uf2 = UFBlock(in_planes=self.mse3_out_planes*self.uf_expansions[0], length=length, groups=self.groups, expansion_rate=self.uf_expansions[1], wfb_switch=wfb_switch, skip_connection=False)
-            self.uf3 = UFBlock(in_planes=self.mse3_out_planes*self.uf_expansions[0]*self.uf_expansions[1], length=length, groups=self.groups, expansion_rate=self.uf_expansions[2], wfb_switch=wfb_switch, skip_connection=False)
+            self.uf1 = UFBlock(in_planes=self.mse3_out_planes, length=length, groups=self.groups, expansion_rate=self.uf_expansions[0], wfb_switch=wfb_switch, filter_nums=filter_nums, skip_connection=False)
+            self.uf2 = UFBlock(in_planes=self.mse3_out_planes*self.uf_expansions[0], length=length, groups=self.groups, expansion_rate=self.uf_expansions[1], wfb_switch=wfb_switch, filter_nums=filter_nums, skip_connection=False)
+            self.uf3 = UFBlock(in_planes=self.mse3_out_planes*self.uf_expansions[0]*self.uf_expansions[1], length=length, groups=self.groups, expansion_rate=self.uf_expansions[2], wfb_switch=wfb_switch, filter_nums=filter_nums, skip_connection=False)
             out_planes = self.mse3_out_planes*self.uf_expansions[0]*self.uf_expansions[1]*self.uf_expansions[2]
 
         else:
-            self.uf1 = UFBlock(in_planes=self.mse3_out_planes, length=length, groups=self.groups, expansion_rate=self.uf_expansions[0], wfb_switch=wfb_switch, skip_connection=False)
-            self.uf2 = UFBlock(in_planes1=self.mse3_out_planes*self.uf_expansions[0], in_planes2=self.mse2_out_planes, length=length, groups=self.groups, expansion_rate=self.uf_expansions[1], wfb_switch=wfb_switch, skip_connection=True)
-            self.uf3 = UFBlock(in_planes1=self.mse3_out_planes*self.uf_expansions[0]*self.uf_expansions[1]+self.mse2_out_planes, in_planes2=self.mse1_out_planes, length=length, groups=self.groups, expansion_rate=self.uf_expansions[2], wfb_switch=wfb_switch, skip_connection=True)
+            self.uf1 = UFBlock(in_planes=self.mse3_out_planes, length=length, groups=self.groups, expansion_rate=self.uf_expansions[0], wfb_switch=wfb_switch, filter_nums=filter_nums, skip_connection=False)
+            self.uf2 = UFBlock(in_planes1=self.mse3_out_planes*self.uf_expansions[0], in_planes2=self.mse2_out_planes, length=length, groups=self.groups, expansion_rate=self.uf_expansions[1], wfb_switch=wfb_switch, filter_nums=filter_nums, skip_connection=True)
+            self.uf3 = UFBlock(in_planes1=self.mse3_out_planes*self.uf_expansions[0]*self.uf_expansions[1]+self.mse2_out_planes, in_planes2=self.mse1_out_planes, length=length, groups=self.groups, expansion_rate=self.uf_expansions[2], wfb_switch=wfb_switch, filter_nums=filter_nums, skip_connection=True)
             out_planes = (self.mse3_out_planes*self.uf_expansions[0]*self.uf_expansions[1]+self.mse2_out_planes + self.mse1_out_planes) * self.uf_expansions[2] + self.mse3_out_planes
 
         self.calibration = nn.Sequential(DWTLayer(levels=1), FFTLayer(in_planes=out_planes, length=length, wfb_switch=wfb_switch))
@@ -569,7 +573,7 @@ if __name__ == '__main__':
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     x = torch.randn(size=(32, 10, 100))
     x = x.to(device=device)
-    model = UFNet(in_planes=10, num_classes=3, mse_expansions=[2, 3, 3], uf_expansions=[3, 6, 2], mse_fft_flag=True, mse_dwt_flag=True, skip_connection=True, wfb_switch=True)
+    model = UFNet(in_planes=10, num_classes=3, mse_expansions=[2, 2, 2], uf_expansions=[2, 2, 2], mse_fft_flag=True, mse_dwt_flag=True, skip_connection=True, wfb_switch=True, filter_nums=10)
     model.to(device=device)
     out = model(x)
     print(out.shape)
