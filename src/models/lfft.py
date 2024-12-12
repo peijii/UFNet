@@ -25,6 +25,29 @@ def convnxn(in_planes: int, out_planes: int, kernel_size: Union[T, Tuple[T]], st
         raise Exception('No such stride, please select only 1 or 2 for stride value.')
 
 
+class GroupConv(nn.Module):
+
+    def __init__(self, in_channels, filter_nums=3, ratio=2, kernel_size=3):
+        super().__init__()
+        self.filter_nums = filter_nums
+        self.conv1 = convnxn(in_planes=in_channels, out_planes=in_channels * filter_nums * ratio, kernel_size=kernel_size, groups=1)
+        self.act = nn.SELU(inplace=True)
+        self.conv2 = convnxn(in_planes=in_channels * filter_nums * ratio, out_planes=in_channels * filter_nums, kernel_size=kernel_size, groups=filter_nums)
+        self.sigmoid = nn.Sigmoid()
+
+    def forward(self, x, w):
+        x = self.conv1(x)
+        x = self.act(x)
+        x = self.conv2(x)
+        x = self.sigmoid(x)
+        #_, C, _ = x.shape
+        #x = torch.split(x, int(C / self.filter_nums), dim=1)
+        x = torch.chunk(x, self.filter_nums, dim=1)
+        x = [i for i in x]
+        x = torch.cat([x[i] * w[i] for i in range(self.filter_nums)], dim=1)
+        return x
+
+
 class LFFT(nn.Module):
 
     def __init__(
@@ -75,35 +98,12 @@ class LFFT(nn.Module):
         if not self.wfb_switch:
             return self.forward_fft(x)
         return self.forward_wfb_fft(x)
- 
-
-class GroupConv(nn.Module):
-
-    def __init__(self, in_channels, filter_nums=3, ratio=2, kernel_size=3):
-        super().__init__()
-        self.filter_nums = filter_nums
-        self.conv1 = convnxn(in_planes=in_channels, out_planes=in_channels * filter_nums * ratio, kernel_size=kernel_size, groups=1)
-        self.act = nn.SELU(inplace=True)
-        self.conv2 = convnxn(in_planes=in_channels * filter_nums * ratio, out_planes=in_channels * filter_nums, kernel_size=kernel_size, groups=filter_nums)
-        self.sigmoid = nn.Sigmoid()
-
-    def forward(self, x, w):
-        x = self.conv1(x)
-        x = self.act(x)
-        x = self.conv2(x)
-        x = self.sigmoid(x)
-        #_, C, _ = x.shape
-        #x = torch.split(x, int(C / self.filter_nums), dim=1)
-        x = torch.chunk(x, self.filter_nums, dim=1)
-        x = [i for i in x]
-        x = torch.cat([x[i] * w[i] for i in range(self.filter_nums)], dim=1)
-        return x
 
 
 if __name__ == '__main__':
     x = torch.randn(size=(10, 10, 200))
     plt.plot(x[0][0])
-    model = LFFT(in_planes=10, length=200, wfb_switch=True, filter_nums=3)
+    model = LFFT(in_planes=10, length=200, wfb_switch=False, filter_nums=3)
     res = model(x)
     plt.plot(res[0][0].detach().numpy())
     plt.show()

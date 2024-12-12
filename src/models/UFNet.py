@@ -26,6 +26,7 @@ def convnxn(in_planes: int, out_planes: int, kernel_size: Union[T, Tuple[T]], st
     else:
         raise Exception('No such stride, please select only 1 or 2 for stride value.')
 
+
 # ===================== I2CBlock ===========================
 class I2CBlockv1(nn.Module):
 
