@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 import matplotlib.pyplot as plt
-from typing import Union, TypeVar, Tuple, Optional, Callable
+from typing import Union, TypeVar, Tuple
 T = TypeVar('T')
 
 def convnxn(in_planes: int, out_planes: int, kernel_size: Union[T, Tuple[T]], stride: int = 1,

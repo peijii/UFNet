@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 from torch.autograd import Function
 import pywt
-from typing import Union, TypeVar, Tuple, Optional, Callable
+from typing import Union, TypeVar, Tuple
 T = TypeVar('T')
 
 def convnxn(in_planes: int, out_planes: int, kernel_size: Union[T, Tuple[T]], stride: int = 1,
@@ -238,8 +238,8 @@ class LDWT(nn.Module):
         x = self.mwp(x_dwt)
         x = [x[i] * self.parameter[i] for i in range(self.level+1)]
         x = [x[i] * x_dwt[i] for i in range(self.level+1)]
-        x = self.idwt(x)
-        return x
+        x_star = self.idwt(x)
+        return x_star
     
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         if self.att_switch:
@@ -251,6 +251,6 @@ class LDWT(nn.Module):
 # Example usage
 if __name__ == "__main__":
     x = torch.randn(10, 10, 100)
-    model = LDWT(in_planes=10, length=100, level=5, att_switch=True)
+    model = LDWT(in_planes=10, length=100, level=5, att_switch=False)
     res = model(x)
     print(res.shape)
