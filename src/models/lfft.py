@@ -101,10 +101,13 @@ class LFFT(nn.Module):
 
 
 if __name__ == '__main__':
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     x = torch.randn(size=(10, 10, 200))
-    plt.plot(x[0][0])
+    x = x.to(device=device)
+    #plt.plot(x[0][0])
     model = LFFT(in_planes=10, length=200, wfb_switch=False, filter_nums=3)
+    model.to(device)
     res = model(x)
-    plt.plot(res[0][0].detach().numpy())
-    plt.show()
-    print(res[0][0].detach().numpy())
+    #plt.plot(res[0][0].detach().numpy())
+    #plt.show()
+    #print(res[0][0].detach().numpy())

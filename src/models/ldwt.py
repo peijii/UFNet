@@ -33,12 +33,12 @@ class MLWaveLetProcessor(nn.Module):
         # Compute lengths for each level
         self.lengths = self.compute_lengths(length, levels)
         self.mlwaveletprocessor = nn.ModuleDict({
-            f"conv_{length}": nn.Sequential(
+            f"conv_{idx}": nn.Sequential(
                 nn.Conv1d(in_channels, in_channels*ratio, kernel_size, padding=kernel_size // 2, groups=1),
                 nn.SELU(inplace=True),
                 nn.Conv1d(in_channels*ratio, in_channels, kernel_size, padding=kernel_size // 2, groups=1),
                 nn.Sigmoid()
-            ) for length in self.lengths})
+            ) for idx in range(len(self.lengths))})
 
     def compute_lengths(self, length, levels):
         """
@@ -54,7 +54,7 @@ class MLWaveLetProcessor(nn.Module):
     def forward(self, x):
         outputs = []
         for idx in range(len(self.lengths)):
-            conv = self.mlwaveletprocessor[f"conv_{self.lengths[idx]}"]
+            conv = self.mlwaveletprocessor[f"conv_{idx}"]
             output = conv(x[idx])
             outputs.append(output)
         return outputs
@@ -65,8 +65,8 @@ class DWT_1D_Function(Function):
     def forward(ctx, x, w_low, w_high):
         x = x.contiguous()
 
-        w_low = w_low.to(dtype=x.dtype)
-        w_high = w_high.to(dtype=x.dtype)
+        w_low = w_low.to(dtype=x.dtype).to('cuda')
+        w_high = w_high.to(dtype=x.dtype).to('cuda')
 
         ctx.save_for_backward(w_low, w_high)
         ctx.shape = x.shape
@@ -216,13 +216,13 @@ class LDWT(nn.Module):
             self.mwp = MLWaveLetProcessor(in_channels=in_planes, length=self.length, levels=self.level, ratio=2, kernel_size=3)
             for _ in range(level):
                 length //= 2
-                self.parameter.append(nn.Parameter(torch.randn(size=(in_planes, length), dtype=torch.float32) * 1.0, requires_grad=True))
-            self.parameter.append(nn.Parameter(torch.randn(size=(in_planes, length), dtype=torch.float32) * 1.0, requires_grad=True))
+                self.parameter.append(nn.Parameter(torch.randn(size=(in_planes, length), dtype=torch.float32) * 1.0, requires_grad=True).to('cuda'))
+            self.parameter.append(nn.Parameter(torch.randn(size=(in_planes, length), dtype=torch.float32) * 1.0, requires_grad=True).to('cuda'))
         else:
             for _ in range(level):
                 length //= 2
-                self.parameter.append(nn.Parameter(torch.randn(size=(in_planes, length), dtype=torch.float32) * 1.0, requires_grad=True))
-            self.parameter.append(nn.Parameter(torch.randn(size=(in_planes, length), dtype=torch.float32) * 1.0, requires_grad=True))
+                self.parameter.append(nn.Parameter(torch.randn(size=(in_planes, length), dtype=torch.float32) * 1.0, requires_grad=True).to('cuda'))
+            self.parameter.append(nn.Parameter(torch.randn(size=(in_planes, length), dtype=torch.float32) * 1.0, requires_grad=True).to('cuda'))
 
         self.dwt = DWTLayer(wave='haar', levels=level)
         self.idwt = IDWTLayer(wave='haar', levels=level)
@@ -250,7 +250,10 @@ class LDWT(nn.Module):
 
 # Example usage
 if __name__ == "__main__":
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     x = torch.randn(10, 10, 100)
-    model = LDWT(in_planes=10, length=100, level=5, att_switch=False)
+    x = x.to(device=device)
+    model = LDWT(in_planes=10, length=100, level=1, att_switch=True)
+    model.to(device)
     res = model(x)
     print(res.shape)
